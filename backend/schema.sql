@@ -1,0 +1,149 @@
+-- ============================================================
+--  AutoSpares Database Schema
+--  Run this in: Supabase Dashboard → SQL Editor → New Query
+-- ============================================================
+
+-- ── 1. spare_parts (the core catalogue) ─────────────────────
+CREATE TABLE spare_parts (
+  id                UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  part_number       TEXT NOT NULL UNIQUE,        -- e.g. 68RD35672A
+  description       TEXT NOT NULL,               -- e.g. Front Brake Pad Set
+  application       TEXT,                        -- e.g. Maruti Swift 2018-2024
+  mrp               NUMERIC(10,2) NOT NULL,      -- Maximum Retail Price (GST inclusive)
+  basic_price       NUMERIC(10,2),               -- Price before GST
+  gst_rate          NUMERIC(5,2) DEFAULT 18,     -- GST % (18, 28, 5, etc.)
+  hsn_code          TEXT,                        -- e.g. 8708
+  company_brand     TEXT NOT NULL,               -- MANDATORY  e.g. Bosch, Minda, Denso
+  manufacturer_name TEXT,                        -- OPTIONAL   e.g. Robert Bosch GmbH
+  category          TEXT,                        -- e.g. Brakes, Filters, Electrical
+  image_urls        TEXT[] DEFAULT '{}',         -- Array of Cloudinary URLs
+  -- Phase-2 ecommerce columns (nullable until ecommerce ships)
+  offer_price       NUMERIC(10,2),               -- Discounted sell price
+  stock_qty         INTEGER DEFAULT 0,
+  seller_id         UUID,
+  delivery_days     INTEGER,
+  created_at        TIMESTAMPTZ DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Full-text search index — now includes company_brand and manufacturer_name
+CREATE INDEX idx_spare_parts_search ON spare_parts
+  USING GIN(
+    to_tsvector('english',
+      COALESCE(part_number,'')       || ' ' ||
+      COALESCE(description,'')       || ' ' ||
+      COALESCE(application,'')       || ' ' ||
+      COALESCE(company_brand,'')     || ' ' ||
+      COALESCE(manufacturer_name,'')
+    )
+  );
+
+-- Index part_number separately for exact lookups
+CREATE INDEX idx_part_number      ON spare_parts (LOWER(part_number));
+-- Index company_brand for fast brand-filter queries
+CREATE INDEX idx_company_brand    ON spare_parts (LOWER(company_brand));
+
+-- ── Migration: if you already ran the old schema ──────────────
+--  Run these ALTER statements instead of the CREATE TABLE above:
+--
+--  ALTER TABLE spare_parts
+--    ADD COLUMN company_brand     TEXT,
+--    ADD COLUMN manufacturer_name TEXT;
+--
+--  -- Backfill company_brand from old brand column (if it existed)
+--  UPDATE spare_parts SET company_brand = brand WHERE brand IS NOT NULL;
+--  UPDATE spare_parts SET company_brand = 'UNKNOWN' WHERE company_brand IS NULL;
+--
+--  -- Now enforce NOT NULL
+--  ALTER TABLE spare_parts
+--    ALTER COLUMN company_brand SET NOT NULL,
+--    DROP COLUMN IF EXISTS brand;
+--
+--  -- Recreate search index
+--  DROP INDEX IF EXISTS idx_spare_parts_search;
+--  CREATE INDEX idx_spare_parts_search ON spare_parts
+--    USING GIN(
+--      to_tsvector('english',
+--        COALESCE(part_number,'')       || ' ' ||
+--        COALESCE(description,'')       || ' ' ||
+--        COALESCE(application,'')       || ' ' ||
+--        COALESCE(company_brand,'')     || ' ' ||
+--        COALESCE(manufacturer_name,'')
+--      )
+--    );
+--  CREATE INDEX idx_company_brand ON spare_parts (LOWER(company_brand));
+
+-- ── 2. user_subscriptions ────────────────────────────────────
+CREATE TABLE user_subscriptions (
+  id             UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id        UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  plan           TEXT NOT NULL DEFAULT 'free' CHECK (plan IN ('free','paid')),
+  queries_used   INTEGER DEFAULT 0,
+  queries_limit  INTEGER DEFAULT 20,     -- admin can change this per user
+  expires_at     TIMESTAMPTZ,            -- NULL = never expires (lifetime)
+  updated_at     TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (user_id)
+);
+
+-- ── 3. admins table ──────────────────────────────────────────
+--  Only users listed here can access /api/admin routes
+CREATE TABLE admins (
+  id         UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id    UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (user_id)
+);
+
+-- ── 4. usage_logs (analytics) ────────────────────────────────
+CREATE TABLE usage_logs (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  action     TEXT,                        -- 'text_search' | 'photo_identify'
+  query      TEXT,                        -- raw search term or joined vision labels
+  success    BOOLEAN,                     -- did the search return any matches?
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_usage_logs_date   ON usage_logs (created_at DESC);
+CREATE INDEX idx_usage_logs_user   ON usage_logs (user_id);
+-- "most searched parts" analytics
+CREATE INDEX idx_usage_logs_query  ON usage_logs (LOWER(query))
+  WHERE query IS NOT NULL;
+-- "failed searches" analytics
+CREATE INDEX idx_usage_logs_failed ON usage_logs (created_at DESC)
+  WHERE success = FALSE;
+
+-- ── 5. Row Level Security (RLS) ──────────────────────────────
+--  Enable RLS on all tables. Backend uses service role (bypasses RLS).
+--  Frontend (anon) users can only read spare_parts.
+
+ALTER TABLE spare_parts       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE admins            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE usage_logs        ENABLE ROW LEVEL SECURITY;
+
+-- Authenticated users can read spare parts
+CREATE POLICY "Read spare parts" ON spare_parts
+  FOR SELECT TO authenticated USING (true);
+
+-- Users can only read their own subscription
+CREATE POLICY "Own subscription" ON user_subscriptions
+  FOR SELECT TO authenticated USING (auth.uid() = user_id);
+
+-- ── 6. Add yourself as the first admin ───────────────────────
+--  After you sign up at your app, get your user UUID from
+--  Supabase Auth → Users, then run:
+--
+--  INSERT INTO admins (user_id) VALUES ('<your-user-uuid>');
+--
+-- ── 7. Reset daily queries (run this as a Supabase cron) ─────
+--  Set up a pg_cron job to reset query counts each midnight IST.
+--  In Supabase: Database → Extensions → enable pg_cron, then:
+--
+--  SELECT cron.schedule(
+--    'reset-daily-queries',
+--    '30 18 * * *',  -- 18:30 UTC = midnight IST
+--    $$ UPDATE user_subscriptions
+--       SET queries_used = 0
+--       WHERE plan = 'free' $$
+--  );
