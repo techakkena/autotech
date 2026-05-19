@@ -14,7 +14,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 // ── Config ────────────────────────────────────────────────────
-const API = import.meta.env.VITE_API_URL || "http://localhost:3001/api";
+const API = import.meta.env.VITE_API_URL || "/api";
 
 // ── Tiny API helper ───────────────────────────────────────────
 async function api(path, options = {}) {
@@ -276,7 +276,7 @@ function Login({ onLogin }) {
   return (
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
-        <div className="login-logo">⚙ AutoSpares</div>
+        <div className="login-logo">⚙ Auto Tech-Technology for spares</div>
         <div className="login-sub">Admin Portal — sign in to continue</div>
         <div className="form-group" style={{ marginBottom: 14 }}>
           <label>Email</label>
@@ -288,7 +288,7 @@ function Login({ onLogin }) {
           <label>Password</label>
           <input type="password" value={form.password} required
             onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-            placeholder="••••••••" />
+            placeholder="••••••••" />     
         </div>
         {err && <div className="text-danger" style={{ marginBottom: 12 }}>{err}</div>}
         <button className="btn btn-primary" style={{ width: "100%" }} disabled={loading}>

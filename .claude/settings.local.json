@@ -49,7 +49,9 @@
       "PowerShell(npm *)",
       "Bash(curl -s -o /dev/null http://localhost:3001/health)",
       "Bash(curl *)",
-      "Bash(findstr /I \"access-control HTTP\")"
+      "Bash(findstr /I \"access-control HTTP\")",
+      "Bash(findstr /I \"access-control\")",
+      "PowerShell(Get-NetTCPConnection *)"
     ]
   }
 }
