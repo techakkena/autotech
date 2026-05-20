@@ -63,12 +63,3 @@ app.listen(PORT, () => {
   console.log(`AutoSpares API listening on http://localhost:${PORT}`);
 });
 ;
-const allowedOrigins = [
-  ...(process.env.FRONTEND_URL || "").split(","),
-  ...(process.env.ADMIN_URL || "").split(","),
-];
-
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true,
-}));  

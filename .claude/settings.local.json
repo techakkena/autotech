@@ -51,7 +51,8 @@
       "Bash(curl *)",
       "Bash(findstr /I \"access-control HTTP\")",
       "Bash(findstr /I \"access-control\")",
-      "PowerShell(Get-NetTCPConnection *)"
+      "PowerShell(Get-NetTCPConnection *)",
+      "PowerShell(Get-ChildItem C:\\\\AIProjects2026\\\\autotech\\\\backendapi -Force | ForEach-Object { $_.Name })"
     ]
   }
 }
