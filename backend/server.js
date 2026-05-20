@@ -29,10 +29,10 @@ import adminRoutes    from "./routes/admin.js";
 
 const app = express();
 
-const allowedOrigins = (
-  process.env.FRONTEND_URL || "http://localhost:5173,http://localhost:5174"
-)
-  .split(",")
+const allowedOrigins = [
+  ...(process.env.FRONTEND_URL || "").split(","),
+  ...(process.env.ADMIN_URL || "").split(","),
+]
   .map((o) => o.trim().replace(/\/$/, ""))
   .filter(Boolean);
 
@@ -48,7 +48,7 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
+//app.options("*", cors(corsOptions));
 app.use(express.json({ limit: "2mb" }));
 
 app.use("/api/auth",     authRoutes);
@@ -57,13 +57,13 @@ app.use("/api/identify", identifyRoutes);
 app.use("/api/admin",    adminRoutes);
 
 app.get("/", (_req, res) =>
-  res.json({ name: "AutoSpares API", health: "/health" })
+  res.json({ name: "AutoSpares API", health: "/health" }) 
 );
 
 app.get("/health", (_req, res) =>
   res.json({ ok: true, ts: new Date().toISOString() })
 );
-
+ 
 app.use((err, _req, res, _next) => {
   console.error("Unhandled error:", err);
   res.status(err.status || 500).json({
