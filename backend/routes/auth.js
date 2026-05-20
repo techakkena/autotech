@@ -211,6 +211,66 @@ router.post("/login", async (req, res) => {
   }
 });
 
+// ── POST /api/auth/forgot-password ────────────────────────────
+//  Sends a password reset link to the user's email.
+//  Supabase emails the user a link that redirects to FRONTEND_URL
+//  with #access_token=...&type=recovery in the URL hash.
+//  Body: { email }
+router.post("/forgot-password", async (req, res) => {
+  const { email } = req.body;
+  if (!email || !/\S+@\S+\.\S+/.test(email)) {
+    return res.status(400).json({ success: false, error: "Valid email required" });
+  }
+
+  const frontend = (process.env.FRONTEND_URL || "")
+    .split(",")[0]
+    .trim()
+    .replace(/\/$/, "");
+  const redirectTo = frontend ? `${frontend}/` : undefined;
+
+  try {
+    const { error } = await supabaseAnon.auth.resetPasswordForEmail(email, {
+      redirectTo,
+    });
+    if (error) throw error;
+  } catch (err) {
+    // Swallow to avoid leaking whether the email exists.
+    console.warn("forgot-password:", err.message);
+  }
+
+  return res.json({
+    success: true,
+    message: `If an account exists for ${email}, a password reset link has been sent.`,
+  });
+});
+
+// ── POST /api/auth/reset-password ─────────────────────────────
+//  Completes the reset flow. Requires the recovery access_token
+//  (sent in Authorization header) — requireAuth resolves it to
+//  req.user. Body: { password }
+router.post("/reset-password", requireAuth, async (req, res) => {
+  const { password } = req.body;
+  if (!password || password.length < 6) {
+    return res.status(400).json({
+      success: false,
+      error: "Password must be at least 6 characters",
+    });
+  }
+
+  try {
+    const { error } = await supabase.auth.admin.updateUserById(req.user.id, {
+      password,
+    });
+    if (error) throw error;
+    return res.json({
+      success: true,
+      message: "Password updated. You can sign in now.",
+    });
+  } catch (err) {
+    return res.status(400).json({ success: false, error: err.message });
+  }
+});
+
 // ── POST /api/auth/admin/login ────────────────────────────────
 //  Admin panel login with email + password.
 //  Returns session only if the user exists in the admins table.

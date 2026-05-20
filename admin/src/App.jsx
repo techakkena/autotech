@@ -12,6 +12,7 @@
 // ============================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import * as XLSX from "xlsx";
 
 // ── Config ────────────────────────────────────────────────────
 const API = import.meta.env.VITE_API_URL || "/api";
@@ -578,6 +579,232 @@ function PartForm({ initial = null, onSaved, onCancel }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+//  BULK EXCEL IMPORT
+// ═══════════════════════════════════════════════════════════════
+const IMPORT_COLUMNS = [
+  "part_number", "description", "application",
+  "mrp", "basic_price", "gst_rate", "hsn_code",
+  "company_brand", "manufacturer_name", "category",
+  "image_urls",
+];
+
+const SAMPLE_ROWS = [
+  {
+    part_number: "BP-001",
+    description: "Front Brake Pad Set",
+    application: "Maruti Suzuki Swift 2018-2024",
+    mrp: 1250,
+    basic_price: 1059.32,
+    gst_rate: 18,
+    hsn_code: "8708",
+    company_brand: "Bosch",
+    manufacturer_name: "Robert Bosch GmbH",
+    category: "Brakes",
+    image_urls: "https://res.cloudinary.com/demo/image/upload/sample.jpg, https://res.cloudinary.com/demo/image/upload/sample2.jpg",
+  },
+  {
+    part_number: "OF-200",
+    description: "Engine Oil Filter",
+    application: "Hyundai i20 2019+",
+    mrp: 350,
+    basic_price: 312.5,
+    gst_rate: 12,
+    hsn_code: "8421",
+    company_brand: "Mann-Filter",
+    manufacturer_name: "",
+    category: "Filters",
+    image_urls: "",
+  },
+];
+
+function BulkImport({ onImported }) {
+  const [rows, setRows] = useState([]);
+  const [fileName, setFileName] = useState("");
+  const [validationErrors, setValidationErrors] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const fileRef = useRef();
+
+  function downloadSample() {
+    const ws = XLSX.utils.json_to_sheet(SAMPLE_ROWS, { header: IMPORT_COLUMNS });
+    // Widen the columns a little for readability
+    ws["!cols"] = IMPORT_COLUMNS.map(() => ({ wch: 22 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Spare Parts");
+    XLSX.writeFile(wb, "spare_parts_sample.xlsx");
+  }
+
+  function handleFile(file) {
+    if (!file) return;
+    setFileName(file.name);
+    setResult(null);
+    setValidationErrors([]);
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(ws, { defval: "" });
+
+        const errs = [];
+        json.forEach((r, i) => {
+          const missing = [];
+          if (!String(r.part_number || "").trim())   missing.push("part_number");
+          if (!String(r.description || "").trim())   missing.push("description");
+          if (!String(r.company_brand || "").trim()) missing.push("company_brand");
+          if (r.mrp === "" || r.mrp == null || isNaN(parseFloat(r.mrp))) missing.push("mrp");
+          if (missing.length) errs.push(`Row ${i + 2}: missing ${missing.join(", ")}`);
+        });
+
+        setRows(json);
+        setValidationErrors(errs);
+      } catch (err) {
+        toast(`Could not parse file: ${err.message}`, "error");
+        setRows([]);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  async function submitImport() {
+    if (!rows.length) return;
+    setLoading(true);
+    try {
+      const data = await api("/admin/parts/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows }),
+      });
+      setResult(data);
+      toast(`Imported ${data.inserted} parts (${data.skipped} skipped)`);
+      if (data.inserted > 0) onImported?.();
+    } catch (e) {
+      toast(e.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function reset() {
+    setRows([]);
+    setFileName("");
+    setValidationErrors([]);
+    setResult(null);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  const previewRows = rows.slice(0, 5);
+  const canSubmit = rows.length > 0 && validationErrors.length === 0 && !loading;
+
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div className="section-head">
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 15 }}>Bulk import from Excel</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+            Add many spare parts at once. Download the sample file, fill it in, then upload.
+            For images, paste one or more public image URLs (comma-separated) in the <code>image_urls</code> column.
+          </div>
+        </div>
+        <button type="button" className="btn btn-ghost" onClick={downloadSample}>
+          ⬇ Download sample (.xlsx)
+        </button>
+      </div>
+
+      <div
+        className="upload-zone"
+        onClick={() => fileRef.current?.click()}
+      >
+        <div style={{ fontSize: 28 }}>📄</div>
+        <p>
+          {fileName
+            ? <>Selected: <strong style={{ color: "var(--text)" }}>{fileName}</strong> — click to choose a different file</>
+            : <>Click to upload an .xlsx, .xls or .csv file</>}
+        </p>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          hidden
+          onChange={(e) => handleFile(e.target.files?.[0])}
+        />
+      </div>
+
+      {rows.length > 0 && (
+        <>
+          <div style={{ marginTop: 14, fontSize: 13 }}>
+            <strong>{rows.length}</strong> rows detected
+            {validationErrors.length > 0 && (
+              <span style={{ color: "var(--danger)", marginLeft: 8 }}>
+                · {validationErrors.length} row(s) have errors
+              </span>
+            )}
+          </div>
+
+          {validationErrors.length > 0 && (
+            <div style={{ marginTop: 10, padding: "10px 12px", border: "1px solid rgba(232,84,84,.3)", background: "rgba(232,84,84,.08)", borderRadius: 7, fontSize: 12, color: "var(--danger)", maxHeight: 120, overflowY: "auto" }}>
+              {validationErrors.slice(0, 20).map((e, i) => <div key={i}>{e}</div>)}
+              {validationErrors.length > 20 && <div>… and {validationErrors.length - 20} more</div>}
+            </div>
+          )}
+
+          <div className="table-wrap" style={{ marginTop: 14, border: "1px solid var(--border)", borderRadius: 8 }}>
+            <table>
+              <thead>
+                <tr>
+                  {IMPORT_COLUMNS.map(c => <th key={c}>{c}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {previewRows.map((r, i) => (
+                  <tr key={i}>
+                    {IMPORT_COLUMNS.map(c => (
+                      <td key={c} style={{ maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {r[c] !== undefined && r[c] !== "" ? String(r[c]) : <span style={{ color: "var(--muted)" }}>—</span>}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {rows.length > previewRows.length && (
+              <div style={{ padding: "8px 14px", fontSize: 12, color: "var(--muted)", borderTop: "1px solid var(--border)" }}>
+                Showing first {previewRows.length} of {rows.length} rows
+              </div>
+            )}
+          </div>
+
+          <div className="flex gap-8" style={{ justifyContent: "flex-end", marginTop: 14 }}>
+            <button type="button" className="btn btn-ghost" onClick={reset}>Clear</button>
+            <button type="button" className="btn btn-primary" onClick={submitImport} disabled={!canSubmit}>
+              {loading
+                ? <><div className="spinner" /> Importing…</>
+                : `Import ${rows.length - validationErrors.length} parts`}
+            </button>
+          </div>
+        </>
+      )}
+
+      {result && (
+        <div style={{ marginTop: 14, padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg3)", fontSize: 13 }}>
+          <div><strong>Inserted:</strong> {result.inserted} · <strong>Skipped:</strong> {result.skipped} of {result.total_rows} total</div>
+          {result.skipped_details?.length > 0 && (
+            <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)", maxHeight: 140, overflowY: "auto" }}>
+              {result.skipped_details.slice(0, 30).map((s, i) => (
+                <div key={i}>· {s.part_number}: {s.reason}</div>
+              ))}
+              {result.skipped_details.length > 30 && <div>… and {result.skipped_details.length - 30} more</div>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  PARTS LIST
 // ═══════════════════════════════════════════════════════════════
 function PartsList({ onEdit }) {
@@ -800,7 +1027,7 @@ function Sidebar({ page, setPage, onLogout }) {
     <div className="sidebar">
       <div className="sidebar-logo">
         <div className="logo-dot" />
-        AutoSpares
+        Automobile Spares
       </div>
       <div className="sidebar-section">Menu</div>
       {NAV.map(n => (
@@ -859,7 +1086,12 @@ export default function App() {
   function renderPage() {
     if (page === "dashboard") return <Dashboard />;
     if (page === "parts") return <PartsList onEdit={p => { setEditPart(p); setPage("edit-part"); }} />;
-    if (page === "add-part") return <PartForm onSaved={() => setPage("parts")} onCancel={() => setPage("parts")} />;
+    if (page === "add-part") return (
+      <>
+        <BulkImport onImported={() => setPage("parts")} />
+        <PartForm onSaved={() => setPage("parts")} onCancel={() => setPage("parts")} />
+      </>
+    );
     if (page === "edit-part" && editPart) return <PartForm initial={editPart} onSaved={() => { setPage("parts"); setEditPart(null); }} onCancel={() => setPage("parts")} />;
     if (page === "users") return <UsersList />;
     return null;

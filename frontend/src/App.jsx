@@ -309,7 +309,7 @@ body {
 //  LOGIN SCREEN
 // ═══════════════════════════════════════════════════════════════
 function Login({ onLogin }) {
-  const [mode, setMode] = useState("signin"); // signin | register
+  const [mode, setMode] = useState("signin"); // signin | register | forgot
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -324,6 +324,25 @@ function Login({ onLogin }) {
   async function submit(e) {
     e.preventDefault();
     setErr(""); setNotice("");
+
+    if (mode === "forgot") {
+      if (!email) { setErr("Enter your email"); return; }
+      setLoading(true);
+      try {
+        const data = await api("/auth/forgot-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        setNotice(data.message || "Check your email for a password reset link.");
+      } catch (e) {
+        setErr(e.error || e.message || "Could not send reset email");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     if (!email || !password) { setErr("Email and password are required"); return; }
     if (mode === "register") {
       if (password.length < 6) { setErr("Password must be at least 6 characters"); return; }
@@ -352,6 +371,12 @@ function Login({ onLogin }) {
     }
   }
 
+  const submitLabel = mode === "register"
+    ? (loading ? "Creating account…" : "Create account")
+    : mode === "forgot"
+    ? (loading ? "Sending reset link…" : "Send reset link")
+    : (loading ? "Signing in…" : "Sign in");
+
   return (
     <div className="login-wrap">
       <form className="login-card fade-up" onSubmit={submit}>
@@ -359,23 +384,33 @@ function Login({ onLogin }) {
         <div className="login-title">Auto Tech</div>
         <div className="login-sub">Identify any spare part instantly — search by photo, part number or description.</div>
 
-        <div className="tab-row">
-          <div className={`tab ${mode === "signin" ? "active" : ""}`} onClick={() => switchMode("signin")}>Sign in</div>
-          <div className={`tab ${mode === "register" ? "active" : ""}`} onClick={() => switchMode("register")}>Register</div>
-        </div>
-  
+        {mode !== "forgot" && (
+          <div className="tab-row">
+            <div className={`tab ${mode === "signin" ? "active" : ""}`} onClick={() => switchMode("signin")}>Sign in</div>
+            <div className={`tab ${mode === "register" ? "active" : ""}`} onClick={() => switchMode("register")}>Register</div>
+          </div>
+        )}
+
+        {mode === "forgot" && (
+          <div style={{ fontSize: 13, color: "var(--ink2)", marginBottom: 18 }}>
+            Enter the email on your account and we'll send a link to reset your password.
+          </div>
+        )}
+
         <div className="form-group">
           <label className="form-label">Email address</label>
           <input className="form-input" type="email" placeholder="you@example.com" autoComplete="email"
             value={email} onChange={e => setEmail(e.target.value)} required />
         </div>
 
-        <div className="form-group">
-          <label className="form-label">Password</label>
-          <input className="form-input" type="password" placeholder="••••••••"
-            autoComplete={mode === "register" ? "new-password" : "current-password"}
-            value={password} onChange={e => setPassword(e.target.value)} required />
-        </div>
+        {mode !== "forgot" && (
+          <div className="form-group">
+            <label className="form-label">Password</label>
+            <input className="form-input" type="password" placeholder="••••••••"
+              autoComplete={mode === "register" ? "new-password" : "current-password"}
+              value={password} onChange={e => setPassword(e.target.value)} required />
+          </div>
+        )}
 
         {mode === "register" && (
           <div className="form-group">
@@ -385,12 +420,110 @@ function Login({ onLogin }) {
           </div>
         )}
 
+        {mode === "signin" && (
+          <div style={{ textAlign: "right", marginBottom: 14, marginTop: -4 }}>
+            <span
+              onClick={() => switchMode("forgot")}
+              style={{ fontSize: 12, color: "var(--accent)", cursor: "pointer", fontWeight: 500 }}
+            >
+              Forgot password?
+            </span>
+          </div>
+        )}
+
         {err && <div className="error-bar">{err}</div>}
         {notice && <div className="error-bar" style={{ background: "rgba(52,201,122,0.12)", borderColor: "rgba(52,201,122,0.4)", color: "#7ad99e" }}>{notice}</div>}
 
         <button className="btn btn-primary" style={{ width: "100%" }} type="submit" disabled={loading}>
-          {loading ? (mode === "register" ? "Creating account…" : "Signing in…") : (mode === "register" ? "Create account" : "Sign in")}
+          {submitLabel}
         </button>
+
+        {mode === "forgot" && (
+          <div style={{ textAlign: "center", marginTop: 16 }}>
+            <span
+              onClick={() => switchMode("signin")}
+              style={{ fontSize: 13, color: "var(--ink3)", cursor: "pointer" }}
+            >
+              ← Back to sign in
+            </span>
+          </div>
+        )}
+      </form>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  RESET PASSWORD SCREEN
+// ═══════════════════════════════════════════════════════════════
+function ResetPassword({ token, onDone }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr("");
+    if (password.length < 6) { setErr("Password must be at least 6 characters"); return; }
+    if (password !== confirm) { setErr("Passwords do not match"); return; }
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/auth/reset-password`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Reset failed");
+      setDone(true);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="login-wrap">
+      <form className="login-card fade-up" onSubmit={submit}>
+        <div className="login-icon">🔐</div>
+        <div className="login-title">Reset password</div>
+        <div className="login-sub">Pick a new password for your account.</div>
+
+        {done ? (
+          <>
+            <div className="error-bar" style={{ background: "rgba(52,201,122,0.12)", borderColor: "rgba(52,201,122,0.4)", color: "#7ad99e" }}>
+              Password updated successfully. You can now sign in with your new password.
+            </div>
+            <button type="button" className="btn btn-primary" style={{ width: "100%" }} onClick={onDone}>
+              Continue to sign in
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="form-group">
+              <label className="form-label">New password</label>
+              <input className="form-input" type="password" placeholder="••••••••" autoComplete="new-password"
+                value={password} onChange={e => setPassword(e.target.value)} required />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Confirm new password</label>
+              <input className="form-input" type="password" placeholder="••••••••" autoComplete="new-password"
+                value={confirm} onChange={e => setConfirm(e.target.value)} required />
+            </div>
+
+            {err && <div className="error-bar">{err}</div>}
+
+            <button className="btn btn-primary" style={{ width: "100%" }} type="submit" disabled={loading}>
+              {loading ? "Updating…" : "Update password"}
+            </button>
+          </>
+        )}
       </form>
     </div>
   );
@@ -729,6 +862,20 @@ export default function App() {
   const [total, setTotal] = useState(0);
   const [selectedPart, setSelectedPart] = useState(null);
   const [loadingMe, setLoadingMe] = useState(true);
+  const [recoveryToken, setRecoveryToken] = useState(null);
+
+  // Detect password-recovery hash from Supabase email link
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash && hash.includes("type=recovery")) {
+      const params = new URLSearchParams(hash.replace(/^#/, ""));
+      const accessToken = params.get("access_token");
+      if (accessToken) {
+        setRecoveryToken(accessToken);
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+    }
+  }, []);
 
   // Check for existing session on load
   useEffect(() => {
@@ -779,6 +926,15 @@ export default function App() {
         <div className="spinner-wrap" style={{ minHeight: "100vh" }}>
           <div className="spinner" />
         </div>
+      </>
+    );
+  }
+
+  if (recoveryToken) {
+    return (
+      <>
+        <style>{css}</style>
+        <ResetPassword token={recoveryToken} onDone={() => setRecoveryToken(null)} />
       </>
     );
   }

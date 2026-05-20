@@ -12,6 +12,7 @@
 // ============================================================
 
 import { Router } from "express";
+import express from "express";
 import { v2 as cloudinary } from "cloudinary";
 import multer from "multer";
 import { supabase } from "../lib/supabase.js";
@@ -94,6 +95,80 @@ router.post("/parts", upload.array("images", 5), async (req, res) => {
     console.error("Add part error:", err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// ── POST /api/admin/parts/bulk ────────────────────────────────
+//  Bulk insert spare parts from an Excel/CSV import.
+//  Admin frontend parses the .xlsx in-browser and posts JSON rows.
+//  Body: { rows: [ { part_number, description, mrp, company_brand, ... }, ... ] }
+router.post("/parts/bulk", express.json({ limit: "5mb" }), async (req, res) => {
+  const { rows } = req.body || {};
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: "rows must be a non-empty array",
+    });
+  }
+  if (rows.length > 1000) {
+    return res.status(400).json({
+      success: false,
+      error: "Maximum 1000 rows per import",
+    });
+  }
+
+  const skipped = [];
+  const records = [];
+
+  rows.forEach((r, idx) => {
+    const part_number    = r.part_number    != null ? String(r.part_number).trim()    : "";
+    const description    = r.description    != null ? String(r.description).trim()    : "";
+    const company_brand  = r.company_brand  != null ? String(r.company_brand).trim()  : "";
+    const mrp            = parseFloat(r.mrp);
+
+    if (!part_number || !description || !company_brand || isNaN(mrp)) {
+      skipped.push({
+        row: idx + 2, // +2: header row + 1-based
+        part_number: part_number || "(missing)",
+        reason: "Missing required: part_number, description, mrp, company_brand",
+      });
+      return;
+    }
+
+    records.push({
+      part_number:       part_number.toUpperCase(),
+      description,
+      application:       r.application       ? String(r.application).trim()       : null,
+      mrp,
+      basic_price:       r.basic_price       ? parseFloat(r.basic_price)          : null,
+      gst_rate:          r.gst_rate          ? parseFloat(r.gst_rate)             : 18,
+      hsn_code:          r.hsn_code          ? String(r.hsn_code).trim()          : null,
+      company_brand,
+      manufacturer_name: r.manufacturer_name ? String(r.manufacturer_name).trim() : null,
+      category:          r.category          ? String(r.category).trim()          : null,
+      image_urls:        parseImageUrls(r.image_urls),
+    });
+  });
+
+  let inserted = 0;
+  for (const rec of records) {
+    const { error } = await supabase.from("spare_parts").insert(rec);
+    if (error) {
+      skipped.push({
+        part_number: rec.part_number,
+        reason: error.code === "23505" ? "Duplicate part number" : error.message,
+      });
+    } else {
+      inserted += 1;
+    }
+  }
+
+  return res.json({
+    success: true,
+    inserted,
+    skipped: skipped.length,
+    skipped_details: skipped,
+    total_rows: rows.length,
+  });
 });
 
 // ── PUT /api/admin/parts/:id ──────────────────────────────────
@@ -256,6 +331,18 @@ router.get("/stats", async (_req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// ── Helper: Parse image_urls cell from bulk import ────────────
+//  Accepts a string ("https://a, https://b") or an array.
+//  Returns up to 5 trimmed http(s) URLs.
+function parseImageUrls(raw) {
+  if (!raw) return [];
+  const list = Array.isArray(raw) ? raw : String(raw).split(/[,\n|]/);
+  return list
+    .map((u) => String(u).trim())
+    .filter((u) => /^https?:\/\/\S+$/i.test(u))
+    .slice(0, 5);
+}
 
 // ── Helper: Upload array of files to Cloudinary ───────────────
 async function uploadImages(files) {

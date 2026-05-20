@@ -53,7 +53,8 @@
       "Bash(findstr /I \"access-control\")",
       "PowerShell(Get-NetTCPConnection *)",
       "PowerShell(Get-ChildItem C:\\\\AIProjects2026\\\\autotech\\\\backendapi -Force | ForEach-Object { $_.Name })",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(npx vite *)"
     ]
   }
 }
