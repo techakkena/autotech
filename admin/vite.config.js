@@ -14,11 +14,11 @@ export default defineConfig({
       },
     },
   },
-  define: {
-    // VITE_API_URL is empty in dev — proxy handles /api/*
-    // In production set VITE_API_URL=https://your-backend.onrender.com/api
-    "import.meta.env.VITE_API_URL": JSON.stringify(
-      process.env.VITE_API_URL || ""
-    ),
-  },
+  // define: {
+  //   // VITE_API_URL is empty in dev — proxy handles /api/*
+  //   // In production set VITE_API_URL=https://your-backend.onrender.com/api
+  //   "import.meta.env.VITE_API_URL": JSON.stringify(
+  //     process.env.VITE_API_URL || ""
+  //   ),
+  // },
 });

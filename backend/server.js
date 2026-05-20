@@ -21,8 +21,7 @@ if (missing.length) {
   console.error("Missing env vars:", missing.join(", "));
   process.exit(1);
 }
-const cors = require('cors');
-
+      
 import authRoutes     from "./routes/auth.js";
 import partsRoutes    from "./routes/parts.js";
 import identifyRoutes from "./routes/identify.js";
