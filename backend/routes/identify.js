@@ -105,7 +105,11 @@ router.post(
 );
 
 console.log("IDENTIFY ROUTE HIT");
-console.log(req.file);
+console.log("FILE:", req.file);
+
+console.log("VISION RESULT:", result);
+
+console.log("FINAL LABELS:", labels);
 
 // ── Helper: Upload buffer to Cloudinary ──────────────────────
 function uploadToCloudinary(buffer) {
