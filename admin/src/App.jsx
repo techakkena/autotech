@@ -406,13 +406,32 @@ const EMPTY_FORM = {
   company_brand: "", manufacturer_name: "", category: "",
 };
 
-const CATEGORIES = [
-  "Brakes", "Engine", "Filters", "Electrical", "Suspension",
-  "Transmission", "Cooling", "Fuel System", "Body Parts",
-  "Lights", "Exhaust", "Tyres & Wheels", "Other",
-];
-
 function PartForm({ initial = null, onSaved, onCancel }) {
+  const [categories, setCategories] = useState([]);
+  const loadCategories = useCallback(() => {
+    api("/admin/categories")
+      .then(d => setCategories(d.categories.map(c => c.name)))
+      .catch(() => {});
+  }, []);
+  useEffect(() => { loadCategories(); }, [loadCategories]);
+  const [addingCat, setAddingCat] = useState(false);
+  const [newCat, setNewCat] = useState("");
+  async function quickAddCategory() {
+    const name = newCat.trim();
+    if (!name) return;
+    try {
+      await api("/admin/categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      toast(`Category "${name}" added`);
+      setCategories(c => [...new Set([...c, name])].sort());
+      setForm(f => ({ ...f, category: name }));
+      setNewCat("");
+      setAddingCat(false);
+    } catch (e) { toast(e.message, "error"); }
+  }
   const [form, setForm] = useState(initial ? {
     part_number: initial.part_number || "",
     description: initial.description || "",
@@ -490,10 +509,36 @@ function PartForm({ initial = null, onSaved, onCancel }) {
           <F name="part_number" label="Part Number" required placeholder="e.g. 68RD35672A" />
           <div className="form-group">
             <label>Category</label>
-            <select value={form.category} onChange={e => set("category", e.target.value)}>
-              <option value="">Select category</option>
-              {CATEGORIES.map(c => <option key={c}>{c}</option>)}
-            </select>
+            {!addingCat ? (
+              <div className="flex gap-8" style={{ alignItems: "stretch" }}>
+                <select
+                  value={form.category}
+                  onChange={e => set("category", e.target.value)}
+                  style={{ flex: 1 }}
+                >
+                  <option value="">Select category</option>
+                  {categories.map(c => <option key={c}>{c}</option>)}
+                </select>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setAddingCat(true)}
+                  title="Add new category"
+                >＋ New</button>
+              </div>
+            ) : (
+              <div className="flex gap-8" style={{ alignItems: "stretch" }}>
+                <input
+                  value={newCat}
+                  onChange={e => setNewCat(e.target.value)}
+                  placeholder="New category name"
+                  style={{ flex: 1 }}
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); quickAddCategory(); } }}
+                />
+                <button type="button" className="btn btn-primary btn-sm" onClick={quickAddCategory}>Save</button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setAddingCat(false); setNewCat(""); }}>Cancel</button>
+              </div>
+            )}
           </div>
           <div className="form-group span2">
             <label>Description<span className="req">*</span></label>
@@ -813,28 +858,30 @@ function PartsList({ onEdit }) {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [confirm, setConfirm] = useState(null);
   const LIMIT = 15;
 
   const load = useCallback(async (query, pg) => {
-    if (!query.trim()) { setParts([]); setTotal(0); return; }
     setLoading(true);
     try {
-      const d = await api(`/parts/search?q=${encodeURIComponent(query)}&page=${pg}&limit=${LIMIT}`);
+      const term = query.trim();
+      const qs = `page=${pg}&limit=${LIMIT}${term ? `&q=${encodeURIComponent(term)}` : ""}`;
+      const d = await api(`/admin/parts?${qs}`);
       setParts(d.results);
       setTotal(d.total);
     } catch {
-      toast("Search failed", "error");
+      toast("Failed to load parts", "error");
     } finally { setLoading(false); }
   }, []);
 
-  // Debounce search
+  // Debounce search (also fires for empty q → loads all parts)
   useEffect(() => {
     const t = setTimeout(() => { setPage(1); load(q, 1); }, 350);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, load]);
 
-  useEffect(() => { if (q.trim()) load(q, page); }, [page]);
+  useEffect(() => { load(q, page); }, [page]);
 
   async function deletePart(id, partNum) {
     try {
@@ -845,6 +892,41 @@ function PartsList({ onEdit }) {
     setConfirm(null);
   }
 
+  async function downloadExcel() {
+    setExporting(true);
+    try {
+      const d = await api("/admin/parts/export");
+      const rows = d.results.map(p => ({
+        part_number:       p.part_number,
+        description:       p.description,
+        application:       p.application || "",
+        company_brand:     p.company_brand,
+        manufacturer_name: p.manufacturer_name || "",
+        category:          p.category || "",
+        mrp:               p.mrp,
+        basic_price:       p.basic_price ?? "",
+        gst_rate:          p.gst_rate,
+        hsn_code:          p.hsn_code || "",
+        image_urls:        Array.isArray(p.image_urls) ? p.image_urls.join(", ") : "",
+        created_at:        p.created_at || "",
+        updated_at:        p.updated_at || "",
+      }));
+      const cols = [
+        "part_number","description","application","company_brand","manufacturer_name",
+        "category","mrp","basic_price","gst_rate","hsn_code","image_urls",
+        "created_at","updated_at",
+      ];
+      const ws = XLSX.utils.json_to_sheet(rows, { header: cols });
+      ws["!cols"] = cols.map(() => ({ wch: 22 }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Spare Parts");
+      const stamp = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(wb, `spare_parts_${stamp}.xlsx`);
+      toast(`Exported ${rows.length} parts`);
+    } catch (e) { toast(e.message, "error"); }
+    finally { setExporting(false); }
+  }
+
   const totalPages = Math.ceil(total / LIMIT);
 
   return (
@@ -852,16 +934,20 @@ function PartsList({ onEdit }) {
       {confirm && <Confirm msg={`Delete part ${confirm.part_number}? This cannot be undone.`}
         onYes={() => deletePart(confirm.id, confirm.part_number)} onNo={() => setConfirm(null)} />}
       <div className="search-row">
-        <input className="search-input" placeholder="Search by part number, description, brand, application…"
+        <input className="search-input" placeholder="Search by part number, description, brand, application… (leave empty to show all)"
           value={q} onChange={e => setQ(e.target.value)} />
+        <button className="btn btn-ghost" onClick={downloadExcel} disabled={exporting}>
+          {exporting ? <><div className="spinner" /> Exporting…</> : "⬇ Download Excel"}
+        </button>
         <button className="btn btn-primary" onClick={() => window.dispatchEvent(new CustomEvent("nav", { detail: "add-part" }))}>
           + Add part
         </button>
       </div>
 
-      {loading && <div className="loading">Searching…</div>}
-      {!loading && q && parts.length === 0 && <div className="empty">No parts found for "{q}"</div>}
-      {!q && <div className="empty" style={{ padding: 40 }}>Type a search term to browse parts</div>}
+      {loading && <div className="loading">Loading parts…</div>}
+      {!loading && parts.length === 0 && (
+        <div className="empty">{q ? `No parts found for "${q}"` : "No spare parts yet — add your first one"}</div>
+      )}
 
       {parts.length > 0 && (
         <div className="card" style={{ padding: 0 }}>
@@ -918,6 +1004,160 @@ function PartsList({ onEdit }) {
           )}
         </div>
       )}
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  CATEGORIES MANAGER  —  add / edit / delete categories
+// ═══════════════════════════════════════════════════════════════
+function CategoriesManager() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState(null); // { id, name, description }
+  const [form, setForm] = useState({ name: "", description: "" });
+  const [confirm, setConfirm] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const d = await api("/admin/categories");
+      setItems(d.categories);
+    } catch (e) { toast(e.message, "error"); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  function startEdit(c) {
+    setEditing(c);
+    setForm({ name: c.name, description: c.description || "" });
+  }
+  function cancelEdit() {
+    setEditing(null);
+    setForm({ name: "", description: "" });
+  }
+
+  async function submit(e) {
+    e.preventDefault();
+    const name = form.name.trim();
+    if (!name) { toast("Name is required", "error"); return; }
+    setSaving(true);
+    try {
+      if (editing) {
+        await api(`/admin/categories/${editing.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, description: form.description }),
+        });
+        toast("Category updated");
+      } else {
+        await api("/admin/categories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, description: form.description }),
+        });
+        toast("Category added");
+      }
+      cancelEdit();
+      load();
+    } catch (err) { toast(err.message, "error"); }
+    finally { setSaving(false); }
+  }
+
+  async function remove(cat) {
+    try {
+      await api(`/admin/categories/${cat.id}`, { method: "DELETE" });
+      toast(`Category "${cat.name}" deleted`);
+      load();
+    } catch (e) { toast(e.message, "error"); }
+    setConfirm(null);
+  }
+
+  return (
+    <>
+      {confirm && (
+        <Confirm
+          msg={`Delete category "${confirm.name}"? Spare parts using this category will have it cleared.`}
+          onYes={() => remove(confirm)}
+          onNo={() => setConfirm(null)}
+        />
+      )}
+
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ fontWeight: 600, marginBottom: 14 }}>
+          {editing ? `Edit category: ${editing.name}` : "Add new category"}
+        </div>
+        <form onSubmit={submit}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Name<span className="req">*</span></label>
+              <input
+                value={form.name}
+                onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="e.g. Brakes"
+              />
+            </div>
+            <div className="form-group">
+              <label>Description <span style={{ color: "var(--muted)", fontWeight: 400 }}>(optional)</span></label>
+              <input
+                value={form.description}
+                onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+                placeholder="Short description"
+              />
+            </div>
+          </div>
+          <div className="flex gap-8" style={{ justifyContent: "flex-end", marginTop: 14 }}>
+            {editing && (
+              <button type="button" className="btn btn-ghost" onClick={cancelEdit}>Cancel</button>
+            )}
+            <button type="submit" className="btn btn-primary" disabled={saving}>
+              {saving ? <><div className="spinner" />{editing ? "Saving…" : "Adding…"}</> : (editing ? "Save changes" : "Add category")}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div className="card" style={{ padding: 0 }}>
+        <div style={{ padding: "16px 20px", fontWeight: 600, borderBottom: "1px solid var(--border)" }}>
+          {items.length} categor{items.length === 1 ? "y" : "ies"}
+        </div>
+        {loading ? <div className="loading">Loading…</div> : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Description</th>
+                  <th>Created</th>
+                  <th style={{ width: 160 }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.length === 0 && (
+                  <tr><td colSpan={4} className="empty">No categories yet — add one above</td></tr>
+                )}
+                {items.map(c => (
+                  <tr key={c.id}>
+                    <td><span className="badge badge-cat">{c.name}</span></td>
+                    <td style={{ color: "var(--muted)" }}>{c.description || "—"}</td>
+                    <td style={{ color: "var(--muted)", fontSize: 12 }}>
+                      {c.created_at ? new Date(c.created_at).toLocaleDateString("en-IN") : "—"}
+                    </td>
+                    <td>
+                      <div className="flex gap-8">
+                        <button className="btn btn-ghost btn-sm" onClick={() => startEdit(c)}>Edit</button>
+                        <button className="btn btn-danger btn-sm" onClick={() => setConfirm(c)}>Del</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </>
   );
 }
@@ -1016,10 +1256,11 @@ function UsersList() {
 //  SIDEBAR NAV
 // ═══════════════════════════════════════════════════════════════
 const NAV = [
-  { id: "dashboard", label: "Dashboard", icon: "▦" },
-  { id: "parts",     label: "Spare Parts", icon: "🔩" },
-  { id: "add-part",  label: "Add Part",    icon: "＋" },
-  { id: "users",     label: "Users",       icon: "👥" },
+  { id: "dashboard",  label: "Dashboard",   icon: "▦" },
+  { id: "parts",      label: "Spare Parts", icon: "🔩" },
+  { id: "add-part",   label: "Add Part",    icon: "＋" },
+  { id: "categories", label: "Categories",  icon: "🏷" },
+  { id: "users",      label: "Users",       icon: "👥" },
 ];
 
 function Sidebar({ page, setPage, onLogout }) {
@@ -1080,6 +1321,7 @@ export default function App() {
     parts: "Spare Parts",
     "add-part": "Add Spare Part",
     "edit-part": `Edit: ${editPart?.part_number || ""}`,
+    categories: "Categories",
     users: "Users",
   };
 
@@ -1093,6 +1335,7 @@ export default function App() {
       </>
     );
     if (page === "edit-part" && editPart) return <PartForm initial={editPart} onSaved={() => { setPage("parts"); setEditPart(null); }} onCancel={() => setPage("parts")} />;
+    if (page === "categories") return <CategoriesManager />;
     if (page === "users") return <UsersList />;
     return null;
   }

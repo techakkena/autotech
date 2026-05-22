@@ -35,6 +35,96 @@ const upload = multer({
   },
 });
 
+// ── GET /api/admin/parts ──────────────────────────────────────
+//  Browse all parts (paginated). Optional ?q= filters across
+//  part_number / description / application / brand / manufacturer.
+//  Optional ?category= filters by exact category.
+router.get("/parts", async (req, res) => {
+  const page  = Math.max(1, parseInt(req.query.page)  || 1);
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 20));
+  const q        = (req.query.q || "").trim();
+  const category = (req.query.category || "").trim();
+  const offset = (page - 1) * limit;
+
+  try {
+    let query = supabase
+      .from("spare_parts")
+      .select(
+        `id, part_number, description, application,
+         company_brand, manufacturer_name, category,
+         mrp, basic_price, gst_rate, hsn_code, image_urls,
+         created_at, updated_at`,
+        { count: "exact" }
+      )
+      .order("part_number", { ascending: true })
+      .range(offset, offset + limit - 1);
+
+    if (q) {
+      const term = q.toLowerCase();
+      query = query.or(
+        `part_number.ilike.%${term}%,` +
+        `description.ilike.%${term}%,` +
+        `application.ilike.%${term}%,` +
+        `company_brand.ilike.%${term}%,` +
+        `manufacturer_name.ilike.%${term}%`
+      );
+    }
+    if (category) query = query.eq("category", category);
+
+    const { data, error, count } = await query;
+    if (error) throw error;
+
+    const results = data.map((p) => ({
+      ...p,
+      primary_image: p.image_urls?.[0] || null,
+    }));
+
+    return res.json({
+      success: true,
+      total: count,
+      page,
+      limit,
+      results,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── GET /api/admin/parts/export ───────────────────────────────
+//  Returns every spare part as JSON (no pagination) so the admin
+//  UI can build an Excel file client-side via SheetJS.
+router.get("/parts/export", async (_req, res) => {
+  try {
+    const PAGE_SIZE = 1000;
+    let all = [];
+    let from = 0;
+
+    while (true) {
+      const { data, error } = await supabase
+        .from("spare_parts")
+        .select(
+          `id, part_number, description, application,
+           company_brand, manufacturer_name, category,
+           mrp, basic_price, gst_rate, hsn_code, image_urls,
+           created_at, updated_at`
+        )
+        .order("part_number", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      all = all.concat(data);
+      if (data.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
+    }
+
+    return res.json({ success: true, total: all.length, results: all });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ── POST /api/admin/parts ─────────────────────────────────────
 //  Accepts multipart/form-data with one or more images + JSON fields
 //  Fields: part_number, description, application, mrp,
@@ -237,6 +327,130 @@ router.delete("/parts/:id", async (req, res) => {
 
     if (error) throw error;
     return res.json({ success: true, message: "Part deleted" });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── GET /api/admin/categories ─────────────────────────────────
+router.get("/categories", async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("categories")
+      .select("*")
+      .order("name", { ascending: true });
+    if (error) throw error;
+    return res.json({ success: true, categories: data });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── POST /api/admin/categories ────────────────────────────────
+//  Body: { name, description? }
+router.post("/categories", express.json(), async (req, res) => {
+  const name = (req.body?.name || "").trim();
+  const description = req.body?.description?.trim() || null;
+
+  if (!name) {
+    return res.status(400).json({ success: false, error: "name is required" });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("categories")
+      .insert({ name, description })
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === "23505") {
+        return res.status(409).json({
+          success: false,
+          error: `Category "${name}" already exists`,
+        });
+      }
+      throw error;
+    }
+    return res.status(201).json({ success: true, category: data });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── PUT /api/admin/categories/:id ─────────────────────────────
+//  Renames a category. If the name changes, also rename it on
+//  every spare_parts row that referenced the old name.
+router.put("/categories/:id", express.json(), async (req, res) => {
+  const { id } = req.params;
+  const name = (req.body?.name || "").trim();
+  const description = req.body?.description?.trim() || null;
+
+  if (!name) {
+    return res.status(400).json({ success: false, error: "name is required" });
+  }
+
+  try {
+    const { data: existing, error: fetchErr } = await supabase
+      .from("categories")
+      .select("name")
+      .eq("id", id)
+      .single();
+    if (fetchErr) throw fetchErr;
+
+    const { data, error } = await supabase
+      .from("categories")
+      .update({ name, description, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === "23505") {
+        return res.status(409).json({
+          success: false,
+          error: `Category "${name}" already exists`,
+        });
+      }
+      throw error;
+    }
+
+    if (existing.name !== name) {
+      await supabase
+        .from("spare_parts")
+        .update({ category: name })
+        .eq("category", existing.name);
+    }
+
+    return res.json({ success: true, category: data });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── DELETE /api/admin/categories/:id ──────────────────────────
+//  Removes the category row, and clears `category` on any
+//  spare_parts that referenced it (sets to NULL).
+router.delete("/categories/:id", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { data: existing, error: fetchErr } = await supabase
+      .from("categories")
+      .select("name")
+      .eq("id", id)
+      .single();
+    if (fetchErr) throw fetchErr;
+
+    const { error } = await supabase.from("categories").delete().eq("id", id);
+    if (error) throw error;
+
+    await supabase
+      .from("spare_parts")
+      .update({ category: null })
+      .eq("category", existing.name);
+
+    return res.json({ success: true, message: "Category deleted" });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }

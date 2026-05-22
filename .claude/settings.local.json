@@ -54,7 +54,9 @@
       "PowerShell(Get-NetTCPConnection *)",
       "PowerShell(Get-ChildItem C:\\\\AIProjects2026\\\\autotech\\\\backendapi -Force | ForEach-Object { $_.Name })",
       "Bash(git *)",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "Bash(npx --no-install eslint src/App.jsx --max-warnings=0)",
+      "Bash(npx --no-install vite build)"
     ]
   }
 }

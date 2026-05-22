@@ -5,6 +5,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import uploadRoutes from './routes/upload.js';
 
 // ── Required env vars — fail fast if missing ──────────────────
 const REQUIRED = [
@@ -55,6 +56,7 @@ app.use("/api/auth",     authRoutes);
 app.use("/api/parts",    partsRoutes);
 app.use("/api/identify", identifyRoutes);
 app.use("/api/admin",    adminRoutes);
+app.use('/api/upload', uploadRoutes);
 
 app.get("/", (_req, res) =>
   res.json({ name: "AutoSpares API", health: "/health" }) 

@@ -85,22 +85,22 @@ router.get("/search", requireAuth, trackUsage, async (req, res) => {
 });
 
 // ── GET /api/parts/categories ────────────────────────────────
-//  Returns the distinct list of categories for filter dropdowns
+//  Returns the managed list of categories for filter dropdowns
+//  and the admin "Add Part" form.
 router.get("/categories", async (_req, res) => {
   try {
     const { data, error } = await supabase
-      .from("spare_parts")
-      .select("category")
-      .order("category");
+      .from("categories")
+      .select("id, name, description")
+      .order("name", { ascending: true });
 
     if (error) throw error;
 
-    // Deduplicate (Postgres DISTINCT is cleaner but this works too)
-    const categories = [...new Set(data.map((r) => r.category))].filter(
-      Boolean
-    );
-
-    return res.json({ success: true, categories });
+    return res.json({
+      success: true,
+      categories: data.map((c) => c.name),
+      items: data,
+    });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
