@@ -1,17 +1,23 @@
 // ============================================================
-//  routes/identify.js  —  Photo Upload & Part Identification
+//  routes/identify.js  —  Photo Upload & DB-Based Part Search
 //
 //  POST /api/identify
-//    Body: multipart/form-data  { image: <file> }
-//    Returns: matched spare parts based on visual AI labels
+//    Body: multipart/form-data
+//      image: <file>          (required — stored to Cloudinary)
+//      query: <text>          (optional — drives the DB match)
+//    Returns: spare parts matching the text query, ranked.
 //
-//  Flow:
-//    1. User uploads photo (camera or gallery)
-//    2. Upload to Cloudinary (CDN URL)
-//    3. POST image URL to Google Vision REST API (free tier, API key)
-//    4. Vision returns labels + text + web entities
-//    5. Search Supabase by those terms
-//    6. Return matched parts + the Cloudinary URL
+//  Flow (no AI for now):
+//    1. User uploads photo + optional text (part no, brand, etc).
+//    2. Image goes to Cloudinary (kept for future image-similarity search).
+//    3. If `query` was sent, search Supabase: part_number gets highest weight,
+//       then other text columns. Multiple terms are ranked by hit count.
+//    4. If no `query` was sent, return a recent slice of the catalog so the
+//       user can browse and pick one.
+//    5. Frontend displays results in a row; user picks one → checkout flow.
+//
+//  Image-similarity matching (compare uploaded image to image_urls in DB)
+//  is deferred: it requires a perceptual-hash column + a backfill job.
 // ============================================================
 
 import { Router } from "express";
@@ -28,9 +34,6 @@ cloudinary.config({
   api_key:    process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
-
-const VISION_URL =
-  `https://vision.googleapis.com/v1/images:annotate?key=${process.env.GOOGLE_VISION_API_KEY}`;
 
 // ── Multer: in-memory upload (no temp files) ──────────────────
 const upload = multer({
@@ -52,54 +55,42 @@ router.post(
   upload.single("image"),
   async (req, res) => {
     console.log("IDENTIFY ROUTE HIT");
-    console.log("FILE:", req.file);
+    console.log("FILE:", req.file?.originalname, req.file?.size, "bytes");
+    console.log("QUERY:", req.body?.query);
 
     if (!req.file) {
       return res.status(400).json({ success: false, error: "No image uploaded" });
     }
 
     try {
-      const cloudinaryUrl = await uploadToCloudinary(
-        req.file.buffer,
-        req.file.mimetype
-      );
+      const cloudinaryUrl = await uploadToCloudinary(req.file.buffer);
 
-      // Send the raw bytes inline rather than asking Vision to fetch the
-      // Cloudinary URL — Vision's URL fetcher is unreliable for some hosts.
-      const { labels, texts } = await analyzeImage(req.file.buffer);
-      console.log("FINAL LABELS:", labels);
-      const searchTerms = buildSearchTerms(labels, texts);
-      console.log("SEARCH TERMS:", searchTerms);
+      const rawQuery = (req.body?.query || "").trim();
+      const terms = tokenizeQuery(rawQuery);
+      console.log("SEARCH TERMS:", terms);
 
-      if (searchTerms.length === 0) {
-        logUsage(req, {
-          action: "photo_identify",
-          query: null,
-          success: false,
-        });
-        return res.json({
-          success: true,
-          identified: false,
-          message: "Could not identify a spare part in this image",
-          cloudinary_url: cloudinaryUrl,
-          results: [],
-        });
-      }
-
-      const results = await searchByTerms(searchTerms);
+      const results = terms.length > 0
+        ? await searchByTerms(rawQuery, terms)
+        : await listRecentParts();
 
       logUsage(req, {
         action: "photo_identify",
-        query: searchTerms.join(" "),
+        query: rawQuery || null,
         success: results.length > 0,
       });
 
       return res.json({
         success: true,
-        identified: results.length > 0,
+        identified: terms.length > 0 && results.length > 0,
         cloudinary_url: cloudinaryUrl,
-        search_terms_used: searchTerms,
+        query_used: rawQuery || null,
+        search_terms_used: terms,
         results,
+        message: terms.length === 0
+          ? "No search text provided — showing recent parts. Type a part number, brand, or description to narrow down."
+          : results.length === 0
+          ? "No parts matched your search."
+          : null,
       });
     } catch (err) {
       console.error("Identify error:", err.message);
@@ -127,95 +118,29 @@ function uploadToCloudinary(buffer) {
   });
 }
 
-// ── Helper: Analyse image with Google Vision REST API ─────────
-//  Uses API-key auth (free tier — 1,000 calls/month).
-//  Accepts a Buffer of image bytes, sent inline as base64.
-async function analyzeImage(imageBuffer) {
-  try {
-    const body = {
-      requests: [
-        {
-          image: { content: imageBuffer.toString("base64") },
-          features: [
-            { type: "LABEL_DETECTION", maxResults: 15 },
-            { type: "TEXT_DETECTION" },
-            { type: "WEB_DETECTION", maxResults: 5 },
-          ],
-        },
-      ],
-    };
-
-    const resp = await fetch(VISION_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!resp.ok) {
-      const errText = await resp.text();
-      console.error("Vision API HTTP error:", resp.status, errText);
-      return { labels: [], texts: [] };
-    }
-
-    const json = await resp.json();
-    const result = json.responses?.[0] || {};
-    console.log("VISION RESULT:", JSON.stringify(result, null, 2));
-
-    const labels = (result.labelAnnotations || [])
-      .filter((l) => l.score >= 0.6)
-      .map((l) => l.description.toLowerCase());
-
-    const fullText = result.textAnnotations?.[0]?.description?.toLowerCase() || "";
-    const texts = fullText
-      .split(/\s+/)
-      .filter((t) => t.length > 2);
-
-    const webLabels = (result.webDetection?.webEntities || [])
-      .filter((e) => e.score >= 0.5)
-      .map((e) => e.description?.toLowerCase())
-      .filter(Boolean);
-
-    return { labels: [...new Set([...labels, ...webLabels])], texts };
-  } catch (err) {
-    console.error("Vision API error:", err.message);
-    return { labels: [], texts: [] };
-  }
-}
-
-// ── Filter out generic/useless Vision tokens ──────────────────
-// Single-word stopwords that add no signal for auto-parts matching.
-const IGNORE_LABELS = new Set([
-  "product", "object", "material", "metal", "hardware",
-  "tool", "equipment", "item", "part", "component",
-  "automotive", "vehicle", "car", "auto",
-  "and", "the", "with", "for",
+// ── Tokenize the user's text query ────────────────────────────
+// Split on non-alphanumeric, lowercase, drop very short stopwords.
+// Numeric tokens (4+ digits) are kept — they may be part-number fragments.
+const STOPWORDS = new Set([
+  "and", "the", "with", "for", "from", "into", "this", "that",
 ]);
 
-// Tokenize Vision phrases into individual searchable words.
-// Vision returns multi-word labels like "tire care" or "locking hubs"
-// which never ILIKE-match a column verbatim. Split into words instead.
-function tokenize(phrase) {
-  return phrase
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(
-      (w) =>
-        w.length >= 3 &&
-        !/^[0-9]+$/.test(w) &&
-        !IGNORE_LABELS.has(w)
-    );
+function tokenizeQuery(text) {
+  if (!text) return [];
+  return [
+    ...new Set(
+      text
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length >= 2 && !STOPWORDS.has(w))
+    ),
+  ];
 }
 
-function buildSearchTerms(labels, texts) {
-  const labelTokens = labels.flatMap(tokenize);
-  const partNumberLike = texts.filter((t) => /^[a-z0-9-]{4,20}$/.test(t));
-  return [...new Set([...labelTokens, ...partNumberLike])];
-}
-
-// Count how many distinct terms appear (case-insensitively) in any of
-// a row's text columns. Used for ranking — a row hit by 4 terms beats
-// a row hit by 1.
-const SEARCH_COLUMNS = [
+// ── Score a row against the user's query ──────────────────────
+// part_number hits weigh heavily; full-query substring on part_number
+// is the strongest signal (user is searching for a specific SKU).
+const TEXT_COLUMNS = [
   "part_number",
   "description",
   "application",
@@ -224,21 +149,31 @@ const SEARCH_COLUMNS = [
   "category",
 ];
 
-function scoreRow(row, terms) {
-  const hay = SEARCH_COLUMNS
-    .map((c) => (row[c] || "").toString().toLowerCase())
-    .join("  "); // separator so a term can't span two columns
+function scoreRow(row, rawQuery, terms) {
+  const pn = (row.part_number || "").toLowerCase();
   let score = 0;
-  for (const t of terms) {
-    if (hay.includes(t)) score++;
+
+  // Strong: whole query appears in part_number
+  if (rawQuery && pn.includes(rawQuery.toLowerCase())) {
+    score += 1000;
+    if (pn === rawQuery.toLowerCase()) score += 5000; // exact PN match
   }
+
+  // Per-column term hits — part_number weighted higher than the rest.
+  for (const t of terms) {
+    if (pn.includes(t)) score += 10;
+    for (const c of TEXT_COLUMNS) {
+      if (c === "part_number") continue;
+      const v = (row[c] || "").toString().toLowerCase();
+      if (v.includes(t)) score += 1;
+    }
+  }
+
   return score;
 }
 
-// ── Helper: Search Supabase by multiple terms, then rank in JS ─
-async function searchByTerms(terms) {
-  if (!terms.length) return [];
-
+// ── Search Supabase by terms, then rank in JS ─────────────────
+async function searchByTerms(rawQuery, terms) {
   const orClauses = terms
     .map(
       (t) =>
@@ -248,8 +183,6 @@ async function searchByTerms(terms) {
     )
     .join(",");
 
-  // Fetch a wider candidate pool so the JS ranking has something to
-  // sort. The DB returns ANY-match rows; we pick the best ones.
   const { data, error } = await supabase
     .from("spare_parts")
     .select(
@@ -266,10 +199,10 @@ async function searchByTerms(terms) {
   }
 
   const ranked = data
-    .map((row) => ({ row, score: scoreRow(row, terms) }))
+    .map((row) => ({ row, score: scoreRow(row, rawQuery, terms) }))
     .filter((r) => r.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 10);
+    .slice(0, 20);
 
   console.log(
     "RANKED MATCHES:",
@@ -280,14 +213,50 @@ async function searchByTerms(terms) {
     }))
   );
 
-  return ranked.map(({ row, score }) => ({
-    ...row,
-    match_score: score,
+  return ranked.map(({ row, score }) => enrichPart(row, score));
+}
+
+// ── Fallback: list recent parts when user didn't type anything ─
+async function listRecentParts(limit = 20) {
+  const { data, error } = await supabase
+    .from("spare_parts")
+    .select(
+      `id, part_number, description, application,
+       company_brand, manufacturer_name, category,
+       mrp, basic_price, gst_rate, hsn_code, image_urls, created_at`
+    )
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error("Supabase recent-parts error:", error.message);
+    return [];
+  }
+
+  return data.map((row) => enrichPart(row, 0));
+}
+
+// ── Shape a row for the frontend ──────────────────────────────
+function enrichPart(row, score) {
+  const basic = parseFloat(row.basic_price) || 0;
+  const gstRate = parseFloat(row.gst_rate) || 0;
+  return {
+    id: row.id,
+    part_number: row.part_number,
+    description: row.description,
+    application: row.application,
+    company_brand: row.company_brand,
+    manufacturer_name: row.manufacturer_name,
+    category: row.category,
+    mrp: row.mrp,
+    basic_price: row.basic_price,
+    gst_rate: row.gst_rate,
+    gst_amount: parseFloat(((basic * gstRate) / 100).toFixed(2)),
+    hsn_code: row.hsn_code,
+    image_urls: row.image_urls || [],
     primary_image: row.image_urls?.[0] || null,
-    gst_amount: parseFloat(
-      ((parseFloat(row.basic_price) * parseFloat(row.gst_rate)) / 100).toFixed(2)
-    ),
-  }));
+    match_score: score,
+  };
 }
 
 export default router;

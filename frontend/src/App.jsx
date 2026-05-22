@@ -41,6 +41,55 @@ async function apiForm(path, formData) {
 const inr = (n) =>
   "₹" + parseFloat(n).toLocaleString("en-IN", { minimumFractionDigits: 2 });
 
+// ── Search history (localStorage, 24h TTL, max 20 entries) ────
+const HISTORY_KEY = "as_search_history";
+const HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
+const HISTORY_MAX = 20;
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    const cutoff = Date.now() - HISTORY_TTL_MS;
+    const fresh = arr.filter((e) => e && typeof e.timestamp === "number" && e.timestamp > cutoff);
+    if (fresh.length !== arr.length) {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(fresh));
+    }
+    return fresh;
+  } catch {
+    return [];
+  }
+}
+
+function addHistory(entry) {
+  if (!entry?.query?.trim()) return loadHistory(); // skip empty searches
+  const existing = loadHistory();
+  // De-duplicate by (type, query) — bump the matching entry to the top.
+  const filtered = existing.filter(
+    (e) => !(e.type === entry.type && e.query === entry.query)
+  );
+  const next = [
+    { ...entry, timestamp: Date.now() },
+    ...filtered,
+  ].slice(0, HISTORY_MAX);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+  return next;
+}
+
+function clearHistory() {
+  localStorage.removeItem(HISTORY_KEY);
+}
+
+function timeAgo(ts) {
+  const diff = Math.max(0, Date.now() - ts);
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return `${h}h ago`;
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  STYLES
 // ═══════════════════════════════════════════════════════════════
@@ -182,6 +231,36 @@ body {
 }
 .search-input:focus { border-color: var(--accent); background: #fff; }
 .search-input::placeholder { color: var(--ink3); }
+
+.history-section { margin-top: 22px; }
+.history-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+.history-title {
+  font-family: var(--display); font-size: 12px; font-weight: 600;
+  color: var(--ink3); letter-spacing: .08em; text-transform: uppercase;
+}
+.history-clear {
+  background: none; border: none; cursor: pointer; padding: 4px 8px;
+  font-family: var(--font); font-size: 12px; color: var(--ink3);
+  border-radius: 6px;
+}
+.history-clear:hover { color: var(--accent); background: var(--bg2); }
+.history-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.history-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: #fff; border: 1px solid var(--border); border-radius: 999px;
+  padding: 7px 14px; cursor: pointer; transition: all .15s;
+  font-size: 13px; color: var(--ink2); max-width: 100%;
+}
+.history-chip:hover { border-color: var(--accent); color: var(--ink); }
+.history-chip-icon { font-size: 13px; flex-shrink: 0; }
+.history-chip-q {
+  font-weight: 500; max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.history-chip-meta { color: var(--ink3); font-size: 11px; flex-shrink: 0; }
 .search-btn {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   background: var(--accent); color: #fff; border: none; border-radius: 8px;
@@ -540,7 +619,11 @@ function Home({ onResults, onIdentifyResults, subscription }) {
   const [uploading, setUploading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [err, setErr] = useState("");
+  const [history, setHistory] = useState(loadHistory);
   const fileRef = useRef();
+
+  // Re-filter expired entries on mount in case the tab was open >24h.
+  useEffect(() => { setHistory(loadHistory()); }, []);
 
   function pickFile(f) {
     if (!f || !f.type.startsWith("image/")) return;
@@ -555,9 +638,24 @@ function Home({ onResults, onIdentifyResults, subscription }) {
     try {
       const fd = new FormData();
       fd.append("image", file);
+      // Pass the text-search box value along — backend uses it to filter
+      // (part_number gets priority, then other text columns).
+      fd.append("query", q.trim());
       const data = await apiForm("/identify", fd);
+
+      // Save to local history (skipped automatically if query was empty).
+      setHistory(addHistory({
+        type: "identify",
+        query: q.trim(),
+        result_count: data.results?.length || 0,
+      }));
+
       if (data.results?.length === 0) {
-        setErr("Could not identify this part. Try a clearer photo or search by part number.");
+        setErr(
+          q.trim()
+            ? `No parts matched "${q.trim()}". Try a different part number, brand, or description.`
+            : "Type a part number, brand, or description in the search box below, then tap Identify again."
+        );
       } else {
         onIdentifyResults(data.results, data.search_terms_used);
       }
@@ -568,17 +666,29 @@ function Home({ onResults, onIdentifyResults, subscription }) {
     setUploading(false);
   }
 
-  async function search() {
-    if (!q.trim()) return;
+  async function search(overrideQ) {
+    const text = (overrideQ ?? q).trim();
+    if (!text) return;
+    if (overrideQ !== undefined) setQ(text);
     setErr(""); setSearching(true);
     try {
-      const data = await api(`/parts/search?q=${encodeURIComponent(q.trim())}&limit=20`);
-      onResults(data.results, q, false, data.total);
+      const data = await api(`/parts/search?q=${encodeURIComponent(text)}&limit=20`);
+      setHistory(addHistory({
+        type: "text",
+        query: text,
+        result_count: data.results?.length || 0,
+      }));
+      onResults(data.results, text, false, data.total);
     } catch (e) {
       if (e.status === 429) { onResults([], "", true); return; }
       setErr(e.error || "Search failed.");
     }
     setSearching(false);
+  }
+
+  function handleHistoryClear() {
+    clearHistory();
+    setHistory([]);
   }
 
   const used = subscription?.queries_used || 0;
@@ -637,10 +747,34 @@ function Home({ onResults, onIdentifyResults, subscription }) {
           <input className="search-input" placeholder="Enter part number, brand or description…"
             value={q} onChange={e => setQ(e.target.value)}
             onKeyDown={e => e.key === "Enter" && search()} />
-          <button className="search-btn" onClick={search} disabled={searching}>
+          <button className="search-btn" onClick={() => search()} disabled={searching}>
             {searching ? <div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,.4)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin .6s linear infinite" }} /> : "↵"}
           </button>
         </div>
+
+        {/* Recent searches — last 24h, stored locally */}
+        {history.length > 0 && (
+          <div className="history-section">
+            <div className="history-head">
+              <span className="history-title">Recent searches</span>
+              <button className="history-clear" onClick={handleHistoryClear}>Clear</button>
+            </div>
+            <div className="history-list">
+              {history.map((h) => (
+                <button
+                  key={h.timestamp}
+                  className="history-chip"
+                  title={`${h.result_count} result${h.result_count === 1 ? "" : "s"} · ${timeAgo(h.timestamp)}`}
+                  onClick={() => search(h.query)}
+                >
+                  <span className="history-chip-icon">{h.type === "identify" ? "📷" : "🔍"}</span>
+                  <span className="history-chip-q">{h.query}</span>
+                  <span className="history-chip-meta">{timeAgo(h.timestamp)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Usage indicator for free users */}
         {subscription?.plan === "free" && (
@@ -902,6 +1036,7 @@ export default function App() {
 
   function handleLogout() {
     localStorage.removeItem("as_user_token");
+    clearHistory();
     setUser(null);
     setSubscription(null);
     setScreen("home");
