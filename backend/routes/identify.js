@@ -182,20 +182,60 @@ async function analyzeImage(imageBuffer) {
   }
 }
 
-// ── Filter out generic/useless Vision labels ──────────────────
+// ── Filter out generic/useless Vision tokens ──────────────────
+// Single-word stopwords that add no signal for auto-parts matching.
 const IGNORE_LABELS = new Set([
   "product", "object", "material", "metal", "hardware",
   "tool", "equipment", "item", "part", "component",
   "automotive", "vehicle", "car", "auto",
+  "and", "the", "with", "for",
 ]);
 
-function buildSearchTerms(labels, texts) {
-  const useful = labels.filter((l) => !IGNORE_LABELS.has(l));
-  const partNumberLike = texts.filter((t) => /^[a-z0-9-]{4,20}$/.test(t));
-  return [...new Set([...useful.slice(0, 5), ...partNumberLike])];
+// Tokenize Vision phrases into individual searchable words.
+// Vision returns multi-word labels like "tire care" or "locking hubs"
+// which never ILIKE-match a column verbatim. Split into words instead.
+function tokenize(phrase) {
+  return phrase
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(
+      (w) =>
+        w.length >= 3 &&
+        !/^[0-9]+$/.test(w) &&
+        !IGNORE_LABELS.has(w)
+    );
 }
 
-// ── Helper: Search Supabase by multiple terms (OR logic) ──────
+function buildSearchTerms(labels, texts) {
+  const labelTokens = labels.flatMap(tokenize);
+  const partNumberLike = texts.filter((t) => /^[a-z0-9-]{4,20}$/.test(t));
+  return [...new Set([...labelTokens, ...partNumberLike])];
+}
+
+// Count how many distinct terms appear (case-insensitively) in any of
+// a row's text columns. Used for ranking — a row hit by 4 terms beats
+// a row hit by 1.
+const SEARCH_COLUMNS = [
+  "part_number",
+  "description",
+  "application",
+  "company_brand",
+  "manufacturer_name",
+  "category",
+];
+
+function scoreRow(row, terms) {
+  const hay = SEARCH_COLUMNS
+    .map((c) => (row[c] || "").toString().toLowerCase())
+    .join("  "); // separator so a term can't span two columns
+  let score = 0;
+  for (const t of terms) {
+    if (hay.includes(t)) score++;
+  }
+  return score;
+}
+
+// ── Helper: Search Supabase by multiple terms, then rank in JS ─
 async function searchByTerms(terms) {
   if (!terms.length) return [];
 
@@ -208,6 +248,8 @@ async function searchByTerms(terms) {
     )
     .join(",");
 
+  // Fetch a wider candidate pool so the JS ranking has something to
+  // sort. The DB returns ANY-match rows; we pick the best ones.
   const { data, error } = await supabase
     .from("spare_parts")
     .select(
@@ -216,18 +258,34 @@ async function searchByTerms(terms) {
        mrp, basic_price, gst_rate, hsn_code, image_urls`
     )
     .or(orClauses)
-    .limit(10);
+    .limit(50);
 
   if (error) {
     console.error("Supabase search error:", error.message);
     return [];
   }
 
-  return data.map((part) => ({
-    ...part,
-    primary_image: part.image_urls?.[0] || null,
+  const ranked = data
+    .map((row) => ({ row, score: scoreRow(row, terms) }))
+    .filter((r) => r.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10);
+
+  console.log(
+    "RANKED MATCHES:",
+    ranked.map((r) => ({
+      id: r.row.id,
+      part_number: r.row.part_number,
+      score: r.score,
+    }))
+  );
+
+  return ranked.map(({ row, score }) => ({
+    ...row,
+    match_score: score,
+    primary_image: row.image_urls?.[0] || null,
     gst_amount: parseFloat(
-      ((parseFloat(part.basic_price) * parseFloat(part.gst_rate)) / 100).toFixed(2)
+      ((parseFloat(row.basic_price) * parseFloat(row.gst_rate)) / 100).toFixed(2)
     ),
   }));
 }
