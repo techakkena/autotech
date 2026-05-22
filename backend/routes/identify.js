@@ -51,6 +51,9 @@ router.post(
   trackUsage,
   upload.single("image"),
   async (req, res) => {
+    console.log("IDENTIFY ROUTE HIT");
+    console.log("FILE:", req.file);
+
     if (!req.file) {
       return res.status(400).json({ success: false, error: "No image uploaded" });
     }
@@ -64,7 +67,9 @@ router.post(
       // Send the raw bytes inline rather than asking Vision to fetch the
       // Cloudinary URL — Vision's URL fetcher is unreliable for some hosts.
       const { labels, texts } = await analyzeImage(req.file.buffer);
+      console.log("FINAL LABELS:", labels);
       const searchTerms = buildSearchTerms(labels, texts);
+      console.log("SEARCH TERMS:", searchTerms);
 
       if (searchTerms.length === 0) {
         logUsage(req, {
@@ -103,13 +108,6 @@ router.post(
     }
   }
 );
-
-console.log("IDENTIFY ROUTE HIT");
-console.log("FILE:", req.file);
-
-console.log("VISION RESULT:", result);
-
-console.log("FINAL LABELS:", labels);
 
 // ── Helper: Upload buffer to Cloudinary ──────────────────────
 function uploadToCloudinary(buffer) {
@@ -161,6 +159,7 @@ async function analyzeImage(imageBuffer) {
 
     const json = await resp.json();
     const result = json.responses?.[0] || {};
+    console.log("VISION RESULT:", JSON.stringify(result, null, 2));
 
     const labels = (result.labelAnnotations || [])
       .filter((l) => l.score >= 0.6)
