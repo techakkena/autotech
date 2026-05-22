@@ -104,6 +104,9 @@ router.post(
   }
 );
 
+console.log("IDENTIFY ROUTE HIT");
+console.log(req.file);
+
 // ── Helper: Upload buffer to Cloudinary ──────────────────────
 function uploadToCloudinary(buffer) {
   return new Promise((resolve, reject) => {
