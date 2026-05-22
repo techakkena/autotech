@@ -61,7 +61,9 @@ router.post(
         req.file.mimetype
       );
 
-      const { labels, texts } = await analyzeImage(cloudinaryUrl);
+      // Send the raw bytes inline rather than asking Vision to fetch the
+      // Cloudinary URL — Vision's URL fetcher is unreliable for some hosts.
+      const { labels, texts } = await analyzeImage(req.file.buffer);
       const searchTerms = buildSearchTerms(labels, texts);
 
       if (searchTerms.length === 0) {
@@ -122,12 +124,13 @@ function uploadToCloudinary(buffer) {
 
 // ── Helper: Analyse image with Google Vision REST API ─────────
 //  Uses API-key auth (free tier — 1,000 calls/month).
-async function analyzeImage(imageUrl) {
+//  Accepts a Buffer of image bytes, sent inline as base64.
+async function analyzeImage(imageBuffer) {
   try {
     const body = {
       requests: [
         {
-          image: { source: { imageUri: imageUrl } },
+          image: { content: imageBuffer.toString("base64") },
           features: [
             { type: "LABEL_DETECTION", maxResults: 15 },
             { type: "TEXT_DETECTION" },

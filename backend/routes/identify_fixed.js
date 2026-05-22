@@ -57,8 +57,10 @@ router.post(
       console.log("✅  Cloudinary URL:", cloudinaryUrl);
 
       // ── Step 2: Run Google Vision ────────────────────────────
+      // Send the raw image bytes inline (base64) instead of the Cloudinary
+      // URL — Vision's URL fetcher is unreliable for some hosts.
       console.log("🔍  Calling Google Vision API...");
-      const { labels, texts, webLabels } = await analyzeImage(cloudinaryUrl);
+      const { labels, texts, webLabels } = await analyzeImage(req.file.buffer);
       console.log("📋  Raw labels:", labels);
       console.log("📝  Raw texts:", texts);
       console.log("🌐  Web labels:", webLabels);
@@ -122,8 +124,9 @@ function uploadToCloudinary(buffer, mimetype) {
 }
 
 // ── Helper: Analyse with Google Vision REST API ───────────────
-// Uses REST API directly — no extra package needed, just API key
-async function analyzeImage(imageUrl) {
+// Uses REST API directly — no extra package needed, just API key.
+// Accepts a Buffer of image bytes and sends them inline as base64.
+async function analyzeImage(imageBuffer) {
   const API_KEY = process.env.GOOGLE_VISION_API_KEY;
 
   if (!API_KEY) {
@@ -140,7 +143,7 @@ async function analyzeImage(imageUrl) {
         body: JSON.stringify({
           requests: [
             {
-              image: { source: { imageUri: imageUrl } },
+              image: { content: imageBuffer.toString("base64") },
               features: [
                 { type: "LABEL_DETECTION",  maxResults: 15 },
                 { type: "TEXT_DETECTION" },
