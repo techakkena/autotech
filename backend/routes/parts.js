@@ -36,13 +36,14 @@ router.get("/search", requireAuth, trackUsage, async (req, res) => {
     let query = supabase
       .from("spare_parts")
       .select(
-        `id, part_number, description, application,
+        `id, part_number, alternate_part_number, description, application,
          company_brand, manufacturer_name, category,
          mrp, basic_price, gst_rate, hsn_code, image_urls`,
         { count: "exact" }
       )
       .or(
         `part_number.ilike.%${searchTerm}%,` +
+        `alternate_part_number.ilike.%${searchTerm}%,` +
         `description.ilike.%${searchTerm}%,` +
         `application.ilike.%${searchTerm}%,` +
         `company_brand.ilike.%${searchTerm}%,` +

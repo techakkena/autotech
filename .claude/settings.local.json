@@ -56,7 +56,8 @@
       "Bash(git *)",
       "Bash(npx vite *)",
       "Bash(npx --no-install eslint src/App.jsx --max-warnings=0)",
-      "Bash(npx --no-install vite build)"
+      "Bash(npx --no-install vite build)",
+      "PowerShell(Get-Content C:\\\\AIProjects2026\\\\autotech\\\\backend\\\\server.js -TotalCount 5; \"---\"; \\(Get-Content C:\\\\AIProjects2026\\\\autotech\\\\backend\\\\server.js | Measure-Object -Line\\).Lines)"
     ]
   }
 }

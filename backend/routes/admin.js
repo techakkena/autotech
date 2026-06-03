@@ -50,7 +50,7 @@ router.get("/parts", async (req, res) => {
     let query = supabase
       .from("spare_parts")
       .select(
-        `id, part_number, description, application,
+        `id, part_number, alternate_part_number, description, application,
          company_brand, manufacturer_name, category,
          mrp, basic_price, gst_rate, hsn_code, image_urls,
          created_at, updated_at`,
@@ -63,6 +63,7 @@ router.get("/parts", async (req, res) => {
       const term = q.toLowerCase();
       query = query.or(
         `part_number.ilike.%${term}%,` +
+        `alternate_part_number.ilike.%${term}%,` +
         `description.ilike.%${term}%,` +
         `application.ilike.%${term}%,` +
         `company_brand.ilike.%${term}%,` +
@@ -104,7 +105,7 @@ router.get("/parts/export", async (_req, res) => {
       const { data, error } = await supabase
         .from("spare_parts")
         .select(
-          `id, part_number, description, application,
+          `id, part_number, alternate_part_number, description, application,
            company_brand, manufacturer_name, category,
            mrp, basic_price, gst_rate, hsn_code, image_urls,
            created_at, updated_at`
@@ -133,7 +134,7 @@ router.get("/parts/export", async (_req, res) => {
 //          category
 router.post("/parts", upload.array("images", 5), async (req, res) => {
   const {
-    part_number, description, application,
+    part_number, alternate_part_number, description, application,
     mrp, basic_price, gst_rate, hsn_code,
     company_brand, manufacturer_name,
     category,
@@ -155,6 +156,7 @@ router.post("/parts", upload.array("images", 5), async (req, res) => {
       .from("spare_parts")
       .insert({
         part_number:       part_number.trim().toUpperCase(),
+        alternate_part_number: alternate_part_number?.trim().toUpperCase() || null,
         description:       description.trim(),
         application:       application?.trim()       || null,
         mrp:               parseFloat(mrp),
@@ -226,6 +228,7 @@ router.post("/parts/bulk", express.json({ limit: "5mb" }), async (req, res) => {
 
     records.push({
       part_number:       part_number.toUpperCase(),
+      alternate_part_number: r.alternate_part_number ? String(r.alternate_part_number).trim().toUpperCase() : null,
       description,
       application:       r.application       ? String(r.application).trim()       : null,
       mrp,
@@ -284,12 +287,16 @@ router.put("/parts/:id", upload.array("images", 5), async (req, res) => {
     // Build update object — only include fields that were sent
     const updates = {};
     const fields = [
-      "description", "application", "mrp", "basic_price",
+      "alternate_part_number", "description", "application", "mrp", "basic_price",
       "gst_rate", "hsn_code", "company_brand", "manufacturer_name", "category",
     ];
     fields.forEach((f) => {
       if (req.body[f] !== undefined) updates[f] = req.body[f];
     });
+    if (updates.alternate_part_number !== undefined) {
+      const v = String(updates.alternate_part_number).trim();
+      updates.alternate_part_number = v ? v.toUpperCase() : null;
+    }
 
     // Prevent wiping out the mandatory company_brand with an empty string
     if (updates.company_brand !== undefined && !updates.company_brand?.trim()) {

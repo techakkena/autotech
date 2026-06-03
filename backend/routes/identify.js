@@ -142,6 +142,7 @@ function tokenizeQuery(text) {
 // is the strongest signal (user is searching for a specific SKU).
 const TEXT_COLUMNS = [
   "part_number",
+  "alternate_part_number",
   "description",
   "application",
   "company_brand",
@@ -151,19 +152,28 @@ const TEXT_COLUMNS = [
 
 function scoreRow(row, rawQuery, terms) {
   const pn = (row.part_number || "").toLowerCase();
+  const apn = (row.alternate_part_number || "").toLowerCase();
   let score = 0;
 
-  // Strong: whole query appears in part_number
-  if (rawQuery && pn.includes(rawQuery.toLowerCase())) {
-    score += 1000;
-    if (pn === rawQuery.toLowerCase()) score += 5000; // exact PN match
+  // Strong: whole query appears in part_number or alternate_part_number
+  if (rawQuery) {
+    const rq = rawQuery.toLowerCase();
+    if (pn.includes(rq)) {
+      score += 1000;
+      if (pn === rq) score += 5000; // exact PN match
+    }
+    if (apn && apn.includes(rq)) {
+      score += 1000;
+      if (apn === rq) score += 5000; // exact alt-PN match
+    }
   }
 
-  // Per-column term hits — part_number weighted higher than the rest.
+  // Per-column term hits — part_number / alternate_part_number weighted higher than the rest.
   for (const t of terms) {
     if (pn.includes(t)) score += 10;
+    if (apn.includes(t)) score += 10;
     for (const c of TEXT_COLUMNS) {
-      if (c === "part_number") continue;
+      if (c === "part_number" || c === "alternate_part_number") continue;
       const v = (row[c] || "").toString().toLowerCase();
       if (v.includes(t)) score += 1;
     }
@@ -177,16 +187,17 @@ async function searchByTerms(rawQuery, terms) {
   const orClauses = terms
     .map(
       (t) =>
-        `part_number.ilike.%${t}%,description.ilike.%${t}%,` +
-        `application.ilike.%${t}%,company_brand.ilike.%${t}%,` +
-        `manufacturer_name.ilike.%${t}%,category.ilike.%${t}%`
+        `part_number.ilike.%${t}%,alternate_part_number.ilike.%${t}%,` +
+        `description.ilike.%${t}%,application.ilike.%${t}%,` +
+        `company_brand.ilike.%${t}%,manufacturer_name.ilike.%${t}%,` +
+        `category.ilike.%${t}%`
     )
     .join(",");
 
   const { data, error } = await supabase
     .from("spare_parts")
     .select(
-      `id, part_number, description, application,
+      `id, part_number, alternate_part_number, description, application,
        company_brand, manufacturer_name, category,
        mrp, basic_price, gst_rate, hsn_code, image_urls`
     )
@@ -221,7 +232,7 @@ async function listRecentParts(limit = 20) {
   const { data, error } = await supabase
     .from("spare_parts")
     .select(
-      `id, part_number, description, application,
+      `id, part_number, alternate_part_number, description, application,
        company_brand, manufacturer_name, category,
        mrp, basic_price, gst_rate, hsn_code, image_urls, created_at`
     )
@@ -243,6 +254,7 @@ function enrichPart(row, score) {
   return {
     id: row.id,
     part_number: row.part_number,
+    alternate_part_number: row.alternate_part_number,
     description: row.description,
     application: row.application,
     company_brand: row.company_brand,

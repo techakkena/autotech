@@ -31,16 +31,21 @@ CREATE TABLE spare_parts (
 CREATE INDEX idx_spare_parts_search ON spare_parts
   USING GIN(
     to_tsvector('english',
-      COALESCE(part_number,'')       || ' ' ||
-      COALESCE(description,'')       || ' ' ||
-      COALESCE(application,'')       || ' ' ||
-      COALESCE(company_brand,'')     || ' ' ||
+      COALESCE(part_number,'')           || ' ' ||
+      COALESCE(alternate_part_number,'') || ' ' ||
+      COALESCE(description,'')           || ' ' ||
+      COALESCE(application,'')           || ' ' ||
+      COALESCE(company_brand,'')         || ' ' ||
       COALESCE(manufacturer_name,'')
     )
   );
 
 -- Index part_number separately for exact lookups
 CREATE INDEX idx_part_number      ON spare_parts (LOWER(part_number));
+-- Index alternate_part_number for fast lookups by interchangeable SKU
+CREATE INDEX idx_alternate_part_number
+  ON spare_parts (LOWER(alternate_part_number))
+  WHERE alternate_part_number IS NOT NULL;
 -- Index company_brand for fast brand-filter queries
 CREATE INDEX idx_company_brand    ON spare_parts (LOWER(company_brand));
 

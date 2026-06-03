@@ -401,7 +401,7 @@ function ImageUploadZone({ files, setFiles, existingUrls = [], onRemoveExisting 
 //  PART FORM  (used for both Add and Edit)
 // ═══════════════════════════════════════════════════════════════
 const EMPTY_FORM = {
-  part_number: "", description: "", application: "",
+  part_number: "", description: "", application: "", alternate_part_number: "",
   mrp: "", basic_price: "", gst_rate: "18", hsn_code: "",
   company_brand: "", manufacturer_name: "", category: "",
 };
@@ -436,6 +436,7 @@ function PartForm({ initial = null, onSaved, onCancel }) {
     part_number: initial.part_number || "",
     description: initial.description || "",
     application: initial.application || "",
+    alternate_part_number: initial.alternate_part_number || "",
     mrp: initial.mrp || "",
     basic_price: initial.basic_price || "",
     gst_rate: initial.gst_rate || "18",
@@ -549,6 +550,10 @@ function PartForm({ initial = null, onSaved, onCancel }) {
             <label>Application (vehicle fitment)</label>
             <input value={form.application} onChange={e => set("application", e.target.value)} placeholder="e.g. Maruti Suzuki Swift 2018–2024, Hyundai i20 2019+" />
           </div>
+          <div className="form-group span2">
+            <label>Alternate Part Number <span style={{ color: "var(--muted)", fontWeight: 400 }}>(optional)</span></label>
+            <input value={form.alternate_part_number} onChange={e => set("alternate_part_number", e.target.value)} placeholder="e.g. 68RD35672B, 68RD35672C" />
+          </div>
         </div>
 
         <hr className="divider" />
@@ -627,28 +632,49 @@ function PartForm({ initial = null, onSaved, onCancel }) {
 //  BULK EXCEL IMPORT
 // ═══════════════════════════════════════════════════════════════
 const IMPORT_COLUMNS = [
-  "part_number", "description", "application",
+  "part_number", "alternate_part_number", "description", "application",
   "mrp", "basic_price", "gst_rate", "hsn_code",
   "company_brand", "manufacturer_name", "category",
   "image_urls",
-];
+];     
 
-const SAMPLE_ROWS = [
+function BulkImport({ onImported }) {
+  const [rows, setRows] = useState([]);
+  const [fileName, setFileName] = useState("");
+  const [validationErrors, setValidationErrors] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const fileRef = useRef();    
+
+  async function downloadSample() {
+    // Pull the live category list from the DB so the sample reflects
+    // exactly the values that will be accepted on import.
+    let categories = [];
+    try {
+      const d = await api("/parts/categories");
+      categories = d.categories;
+    } catch {
+      toast("Could not load categories — sample will use defaults", "error");
+    }
+
+    const SAMPLE_ROWS = [
   {
     part_number: "BP-001",
+    alternate_part_number: "K135250",
     description: "Front Brake Pad Set",
     application: "Maruti Suzuki Swift 2018-2024",
-    mrp: 1250,
+    mrp: 1250, 
     basic_price: 1059.32,
     gst_rate: 18,
     hsn_code: "8708",
     company_brand: "Bosch",
     manufacturer_name: "Robert Bosch GmbH",
-    category: "Brakes",
+    category:   categories[0] ||  "Brakes",   // ← uses first real category
     image_urls: "https://res.cloudinary.com/demo/image/upload/sample.jpg, https://res.cloudinary.com/demo/image/upload/sample2.jpg",
   },
   {
     part_number: "OF-200",
+    alternate_part_number: "B145252",
     description: "Engine Oil Filter",
     application: "Hyundai i20 2019+",
     mrp: 350,
@@ -657,25 +683,29 @@ const SAMPLE_ROWS = [
     hsn_code: "8421",
     company_brand: "Mann-Filter",
     manufacturer_name: "",
-    category: "Filters",
+    category:  categories[1] ||   "Filters",  // ← uses second real category
     image_urls: "",
   },
 ];
 
-function BulkImport({ onImported }) {
-  const [rows, setRows] = useState([]);
-  const [fileName, setFileName] = useState("");
-  const [validationErrors, setValidationErrors] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const fileRef = useRef();
+    // Substitute the first available real categories into the example rows
+    const sampleRows = SAMPLE_ROWS.map((row, i) => ({
+      ...row,
+      category: categories[i] ?? row.category,
+    }));
 
-  function downloadSample() {
-    const ws = XLSX.utils.json_to_sheet(SAMPLE_ROWS, { header: IMPORT_COLUMNS });
-    // Widen the columns a little for readability
+    const ws = XLSX.utils.json_to_sheet(sampleRows, { header: IMPORT_COLUMNS });
     ws["!cols"] = IMPORT_COLUMNS.map(() => ({ wch: 22 }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Spare Parts");
+
+    // Second sheet: full list of valid category names from the database
+    const catRows = (categories.length ? categories : SAMPLE_ROWS.map(r => r.category))
+      .map(name => ({ category: name }));
+    const catWs = XLSX.utils.json_to_sheet(catRows, { header: ["category"] });
+    catWs["!cols"] = [{ wch: 30 }];
+    XLSX.utils.book_append_sheet(wb, catWs, "Categories");        
+
     XLSX.writeFile(wb, "spare_parts_sample.xlsx");
   }
 

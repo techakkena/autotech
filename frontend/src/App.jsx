@@ -918,11 +918,17 @@ function Detail({ partId, partPreview, onBack }) {
                 <div className="df-val" style={{ fontFamily: "monospace" }}>{part.hsn_code}</div>
               </div>
             )}
+            {part.alternate_part_number && (
+              <div className="detail-field" style={{ gridColumn: "1 / -1" }}>
+                <div className="df-label">Alternate part number</div>
+                <div className="df-val" style={{ fontFamily: "monospace" }}>{part.alternate_part_number}</div>
+              </div>
+            )}
           </div>
 
           {part.application && (
             <div className="detail-app">
-              <div className="detail-app-label">Fits</div>
+              <div className="detail-app-label">Application</div>
               {part.application}
             </div>
           )}
