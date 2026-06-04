@@ -57,7 +57,16 @@
       "Bash(npx vite *)",
       "Bash(npx --no-install eslint src/App.jsx --max-warnings=0)",
       "Bash(npx --no-install vite build)",
-      "PowerShell(Get-Content C:\\\\AIProjects2026\\\\autotech\\\\backend\\\\server.js -TotalCount 5; \"---\"; \\(Get-Content C:\\\\AIProjects2026\\\\autotech\\\\backend\\\\server.js | Measure-Object -Line\\).Lines)"
+      "PowerShell(Get-Content C:\\\\AIProjects2026\\\\autotech\\\\backend\\\\server.js -TotalCount 5; \"---\"; \\(Get-Content C:\\\\AIProjects2026\\\\autotech\\\\backend\\\\server.js | Measure-Object -Line\\).Lines)",
+      "Bash(Get-ChildItem -Path \"C:\\\\AIProjects2026\\\\autotech\" -Recurse -Force)",
+      "Bash(Select-Object FullName)",
+      "Bash(Sort-Object FullName)",
+      "Bash(Get-ChildItem -Path \"C:\\\\AIProjects2026\\\\autotech\" -Force)",
+      "Bash(Select-Object Name, Mode)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\AIProjects2026\\\\autotech\\\\frontend\\\\src\" -Recurse -Force | Select-Object FullName, Mode | Where-Object {$_.Mode -match \"^-\"} | Select-Object -First 30)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\AIProjects2026\\\\autotech\\\\backend\" -Recurse -Depth 1 | Select-Object FullName, Mode | Where-Object {$_.Mode -match \"^[d-]\"} | Select-Object -First 20)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\AIProjects2026\\\\autotech\\\\admin\" -Recurse -Depth 1 | Select-Object FullName, Mode | Where-Object {$_.Mode -match \"^[d-]\"} | Select-Object -First 20)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\AIProjects2026\\\\autotech\\\\admin\\\\src\" -Recurse | Select-Object FullName | Where-Object {$_.FullName -match \"\\\\.\\(jsx|tsx|js|ts\\)$\"})"
     ]
   }
 }

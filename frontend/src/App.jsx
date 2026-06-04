@@ -382,12 +382,43 @@ body {
 .usage-bar { height: 100%; background: var(--accent); border-radius: 20px; transition: width .3s; }
 .usage-row { display: flex; align-items: center; gap: 8px; }
 .usage-label { font-size: 11px; color: var(--ink3); }
+
+/* ── Landing page ── */
+.landing-wrap {
+  min-height: 100vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; padding: 40px 24px;
+  background: var(--bg);
+}
+.landing-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.landing-tagline { font-size: 15px; color: var(--ink3); margin-bottom: 56px; text-align: center; }
+.portal-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 20px; max-width: 600px; width: 100%;
+}
+.portal-card {
+  background: #fff; border: 1.5px solid var(--border); border-radius: 20px;
+  padding: 40px 28px; cursor: pointer; transition: all .2s; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+}
+.portal-card:hover {
+  border-color: var(--accent); box-shadow: 0 8px 32px rgba(200,64,26,.12);
+  transform: translateY(-3px);
+}
+.portal-icon {
+  width: 68px; height: 68px; border-radius: 18px;
+  display: flex; align-items: center; justify-content: center; font-size: 30px;
+}
+.portal-icon.customer { background: #fef5f2; }
+.portal-icon.admin { background: #f0f4ff; }
+.portal-title { font-family: var(--display); font-size: 20px; font-weight: 700; color: var(--ink); }
+.portal-desc { font-size: 13.5px; color: var(--ink3); line-height: 1.55; }
+.portal-card .btn { margin-top: 6px; width: 100%; justify-content: center; }
 `;
 
 // ═══════════════════════════════════════════════════════════════
 //  LOGIN SCREEN
 // ═══════════════════════════════════════════════════════════════
-function Login({ onLogin }) {
+function Login({ onLogin, onBack }) {
   const [mode, setMode] = useState("signin"); // signin | register | forgot
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -459,6 +490,11 @@ function Login({ onLogin }) {
   return (
     <div className="login-wrap">
       <form className="login-card fade-up" onSubmit={submit}>
+        {onBack && (
+          <div className="detail-back" style={{ marginBottom: 16 }} onClick={onBack}>
+            ← Back to home
+          </div>
+        )}
         <div className="login-icon">🔩</div>
         <div className="login-title">Auto Tech</div>
         <div className="login-sub">Identify any spare part instantly — search by photo, part number or description.</div>
@@ -991,6 +1027,39 @@ function Topbar({ user, subscription, onLogout, onHome }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+//  LANDING PAGE — portal selector
+// ═══════════════════════════════════════════════════════════════
+function Landing({ onCustomer }) {
+  const ADMIN_URL = import.meta.env.VITE_ADMIN_URL || "http://localhost:5174";
+
+  return (
+    <div className="landing-wrap">
+      <div className="landing-brand">
+        <div className="logo-mark">A</div>
+        <span className="logo" style={{ fontSize: 22 }}>AutoSpares</span>
+      </div>
+      <p className="landing-tagline">Automobile spare parts — search, identify, manage</p>
+
+      <div className="portal-grid">
+        <div className="portal-card" onClick={onCustomer}>
+          <div className="portal-icon customer">🔍</div>
+          <div className="portal-title">Customer Portal</div>
+          <p className="portal-desc">Search thousands of auto spare parts by photo or part number. Get instant results.</p>
+          <button className="btn btn-primary">Search Parts →</button>
+        </div>
+
+        <div className="portal-card" onClick={() => window.open(ADMIN_URL, "_blank")}>
+          <div className="portal-icon admin">⚙️</div>
+          <div className="portal-title">Admin Portal</div>
+          <p className="portal-desc">Manage inventory, add parts, view users, and monitor platform activity.</p>
+          <button className="btn btn-outline">Admin Dashboard →</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  ROOT APP
 // ═══════════════════════════════════════════════════════════════
 export default function App() {
@@ -1003,6 +1072,7 @@ export default function App() {
   const [selectedPart, setSelectedPart] = useState(null);
   const [loadingMe, setLoadingMe] = useState(true);
   const [recoveryToken, setRecoveryToken] = useState(null);
+  const [portalChosen, setPortalChosen] = useState(false);
 
   // Detect password-recovery hash from Supabase email link
   useEffect(() => {
@@ -1046,6 +1116,7 @@ export default function App() {
     setUser(null);
     setSubscription(null);
     setScreen("home");
+    setPortalChosen(false);
   }
 
   function handleResults(res, q, limitHit = false, tot = 0) {
@@ -1080,11 +1151,21 @@ export default function App() {
     );
   }
 
+  // Show landing portal-selector for unauthenticated visitors who haven't chosen yet
+  if (!user && !portalChosen) {
+    return (
+      <>
+        <style>{css}</style>
+        <Landing onCustomer={() => setPortalChosen(true)} />
+      </>
+    );
+  }
+
   if (!user) {
     return (
       <>
         <style>{css}</style>
-        <Login onLogin={handleLogin} />
+        <Login onLogin={handleLogin} onBack={() => setPortalChosen(false)} />
       </>
     );
   }
