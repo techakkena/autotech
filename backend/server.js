@@ -31,9 +31,20 @@ import adminRoutes    from "./routes/admin.js";
 const app = express();
 
 const allowedOrigins = [
-  ...(process.env.FRONTEND_URL || "").split(","),
-  ...(process.env.ADMIN_URL || "").split(","),
-]
+  "https://autotech-frontend.vercel.app",
+  "https://autotech-delta.vercel.app",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:3000",
+  ...(process.env.FRONTEND_URL || "")
+    .split(",")
+    .map((o) => o.trim().replace(/\/$/, "").replace(/^FRONTEND_URL=/, ""))
+    .filter(Boolean),
+  ...(process.env.ADMIN_URL || "")
+    .split(",")
+    .map((o) => o.trim().replace(/\/$/, "").replace(/^ADMIN_URL=/, ""))
+    .filter(Boolean),
+];
   .map((o) => o.trim().replace(/\/$/, ""))
   .filter(Boolean);
 
