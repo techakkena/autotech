@@ -17,6 +17,7 @@ export default defineConfig({
   // define: {
   //   // VITE_API_URL is empty in dev — proxy handles /api/*
   //   // In production set VITE_API_URL=https://your-backend.onrender.com/api
+  //  //  VITE_API_BASE_URL=https://agreed-doti-techvizag-4b1bfc58.koyeb.app 
   //   "import.meta.env.VITE_API_URL": JSON.stringify(
   //     process.env.VITE_API_URL || ""
   //   ),
