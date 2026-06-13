@@ -41,19 +41,14 @@ const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);
     const normalized = origin.replace(/\/$/, "");
-
-    // Allow exact matches from env vars
     if (allowedOrigins.includes(normalized)) return cb(null, true);
-
-    // Allow ALL Vercel preview deployments for your projects
+    // Allow all Vercel preview deployments
     if (/https:\/\/autotech-.*\.vercel\.app$/.test(normalized)) return cb(null, true);
-
     console.warn(`CORS blocked origin: ${origin}`);
     return cb(new Error(`Origin ${origin} not allowed by CORS`));
   },
   credentials: true,
 };
-
 app.use(cors(corsOptions));
 //app.options("*", cors(corsOptions));
 app.use(express.json({ limit: "2mb" }));
