@@ -12,7 +12,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:3001/api";
+const API = import.meta.env.VITE_API_URL || "/api";
 
 // ── API helpers ───────────────────────────────────────────────
 async function api(path, options = {}) {
@@ -1030,7 +1030,7 @@ function Topbar({ user, subscription, onLogout, onHome }) {
 //  LANDING PAGE — portal selector
 // ═══════════════════════════════════════════════════════════════
 function Landing({ onCustomer }) {
-  const ADMIN_URL = import.meta.env.VITE_ADMIN_URL || "http://localhost:5174";
+  const ADMIN_URL = import.meta.env.VITE_ADMIN_URL || "http://localhost:5174"; // ← this one is fine for local dev
 
   return (
     <div className="landing-wrap">

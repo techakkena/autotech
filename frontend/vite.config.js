@@ -9,9 +9,8 @@ export default defineConfig({
     // ✅ Fix - pointing to Koyeb
 proxy: {
   '/api': {
-    target: 'https://agreed-doti-techvizag-4b1bfc58.koyeb.app',
+    target: 'http://localhost:3001',
     changeOrigin: true,
-    secure: true,
   }
 },
   },

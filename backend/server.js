@@ -30,30 +30,31 @@ import adminRoutes    from "./routes/admin.js";
 
 const app = express();
 
+const envFrontend = (process.env.FRONTEND_URL || "")
+  .split(",")
+  .map((o) => o.trim().replace(/\/$/, "").replace(/^FRONTEND_URL=/, ""))
+  .filter(Boolean);
+
+const envAdmin = (process.env.ADMIN_URL || "")
+  .split(",")
+  .map((o) => o.trim().replace(/\/$/, "").replace(/^ADMIN_URL=/, ""))
+  .filter(Boolean);
+
 const allowedOrigins = [
   "https://autotech-frontend.vercel.app",
   "https://autotech-delta.vercel.app",
   "http://localhost:5173",
   "http://localhost:5174",
   "http://localhost:3000",
-  ...(process.env.FRONTEND_URL || "")
-    .split(",")
-    .map((o) => o.trim().replace(/\/$/, "").replace(/^FRONTEND_URL=/, ""))
-    .filter(Boolean),
-  ...(process.env.ADMIN_URL || "")
-    .split(",")
-    .map((o) => o.trim().replace(/\/$/, "").replace(/^ADMIN_URL=/, ""))
-    .filter(Boolean),
-];;
-  .map((o) => o.trim().replace(/\/$/, ""))
-  .filter(Boolean);
+  ...envFrontend,
+  ...envAdmin,
+];
 
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);
     const normalized = origin.replace(/\/$/, "");
     if (allowedOrigins.includes(normalized)) return cb(null, true);
-    // Allow all Vercel preview deployments
     if (/https:\/\/autotech-.*\.vercel\.app$/.test(normalized)) return cb(null, true);
     console.warn(`CORS blocked origin: ${origin}`);
     return cb(new Error(`Origin ${origin} not allowed by CORS`));
@@ -93,3 +94,4 @@ app.use((err, _req, res, _next) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 ;
+console.log("Allowed origins:", allowedOrigins);

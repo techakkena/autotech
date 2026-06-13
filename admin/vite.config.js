@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react";
 
 // ── Admin panel runs on port 5174 ─────────────────────────────
 // ── Backend API proxied so no CORS issues in dev ──────────────
+
+
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -10,9 +12,8 @@ export default defineConfig({
     // ✅ Fix - pointing to Koyeb
 proxy: {
   '/api': {
-    target: 'https://agreed-doti-techvizag-4b1bfc58.koyeb.app',
+    target: 'http://localhost:3001',
     changeOrigin: true,
-    secure: true,
   }
 },
   },
