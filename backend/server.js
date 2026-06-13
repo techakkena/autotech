@@ -41,8 +41,14 @@ const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);
     const normalized = origin.replace(/\/$/, "");
+
+    // Allow exact matches from env vars
     if (allowedOrigins.includes(normalized)) return cb(null, true);
-    console.warn(`CORS blocked origin: ${origin}. Allowed: ${allowedOrigins.join(", ")}`);
+
+    // Allow ALL Vercel preview deployments for your projects
+    if (/https:\/\/autotech-.*\.vercel\.app$/.test(normalized)) return cb(null, true);
+
+    console.warn(`CORS blocked origin: ${origin}`);
     return cb(new Error(`Origin ${origin} not allowed by CORS`));
   },
   credentials: true,
