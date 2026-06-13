@@ -7,12 +7,14 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5174,
-    proxy: {
-      "/api": {
-        target: "http://localhost:3001",
-        changeOrigin: true,
-      },
-    },
+    // ✅ Fix - pointing to Koyeb
+proxy: {
+  '/api': {
+    target: 'https://agreed-doti-techvizag-4b1bfc58.koyeb.app',
+    changeOrigin: true,
+    secure: true,
+  }
+},
   },
   // define: {
   //   // VITE_API_URL is empty in dev — proxy handles /api/*

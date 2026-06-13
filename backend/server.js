@@ -44,7 +44,7 @@ const allowedOrigins = [
     .split(",")
     .map((o) => o.trim().replace(/\/$/, "").replace(/^ADMIN_URL=/, ""))
     .filter(Boolean),
-];
+];;
   .map((o) => o.trim().replace(/\/$/, ""))
   .filter(Boolean);
 
