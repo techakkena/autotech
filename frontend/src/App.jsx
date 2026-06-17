@@ -48,12 +48,11 @@ async function apiForm(path, formData) {
 const inr = (n) =>
   "₹" + parseFloat(n).toLocaleString("en-IN", { minimumFractionDigits: 2 });
 
-// ── Search history (localStorage, 24h TTL, max 20 entries) ────
+// ── Search history disabled: always clear localStorage-backed history ────
 const HISTORY_KEY = "as_search_history";
-const HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
-const HISTORY_MAX = 20;
-
 function loadHistory() {
+  localStorage.removeItem(HISTORY_KEY);
+  return [];
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
     if (!raw) return [];
@@ -74,20 +73,12 @@ function loadHistory() {
   }
 }
 
-function addHistory(entry) {
-  if (!entry?.query?.trim()) return loadHistory(); // skip empty searches
-  const existing = loadHistory();
-  // De-duplicate by (type, query) — bump the matching entry to the top.
-  const filtered = existing.filter(
-    (e) => !(e.type === entry.type && e.query === entry.query)
-  );
-  const next = [
-    { ...entry, timestamp: Date.now() },
-    ...filtered,
-  ].slice(0, HISTORY_MAX);
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
-  return next;
+
+function addHistory() {
+  localStorage.removeItem(HISTORY_KEY);
+  return [];
 }
+
 
 function clearHistory() {
   localStorage.removeItem(HISTORY_KEY);
@@ -684,6 +675,8 @@ function Home({ onResults, onIdentifyResults, subscription }) {
     if (!file) return;
     const requestId = Date.now();
     identifyRequestRef.current = requestId;
+    clearHistory();
+    setHistory([]);
     setErr(""); setUploading(true);
     try {
       const fd = new FormData();
@@ -696,14 +689,18 @@ function Home({ onResults, onIdentifyResults, subscription }) {
       if (identifyRequestRef.current !== requestId) return;
 
       const identifyResults = identifyData.results || [];
+      if (identifyData.identified === false || identifyResults.length === 0) {
       if (identifyResults.length === 0) {
         setErr(
           identifyData.message ||
           "No database match found for this uploaded photo. Try a clearer image or use text search below."
         );
+        return;
       } else {
         onIdentifyResults(identifyResults, identifyData.search_terms_used, identifyData.query_used);
       }
+
+      onIdentifyResults(identifyResults, identifyData.search_terms_used, identifyData.query_used);
     } catch (e) {
       if (identifyRequestRef.current !== requestId) return;
       if (e.status === 429) { onResults([], "", true); return; }
