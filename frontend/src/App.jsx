@@ -10,7 +10,7 @@
 //   • Limit Wall  — upgrade prompt when free tier used up
 // ============================================================
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 
 const API = import.meta.env.VITE_API_URL || "/api";
 
@@ -27,10 +27,17 @@ async function api(path, options = {}) {
 
 async function apiForm(path, formData) {
   const token = localStorage.getItem("as_user_token");
-  const res = await fetch(`${API}${path}`, {
+  const headers = {
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const separator = path.includes("?") ? "&" : "?";
+  const res = await fetch(`${API}${path}${separator}_=${Date.now()}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    headers,
     body: formData,
+    cache: "no-store",
   });
   const data = await res.json();
   if (!res.ok) throw { status: res.status, ...data };
@@ -657,12 +664,11 @@ function Home({ onResults, onIdentifyResults, subscription }) {
   const [err, setErr] = useState("");
   const [history, setHistory] = useState(loadHistory);
   const fileRef = useRef();
-
-  // Re-filter expired entries on mount in case the tab was open >24h.
-  useEffect(() => { setHistory(loadHistory()); }, []);
+  const identifyRequestRef = useRef(0);
 
   function pickFile(f) {
     if (!f || !f.type.startsWith("image/")) return;
+    if (preview) URL.revokeObjectURL(preview);
     setFile(f);
     setPreview(URL.createObjectURL(f));
     setErr("");
@@ -670,14 +676,19 @@ function Home({ onResults, onIdentifyResults, subscription }) {
 
   async function identify() {
     if (!file) return;
+    const requestId = Date.now();
+    identifyRequestRef.current = requestId;
     setErr(""); setUploading(true);
     try {
       const fd = new FormData();
       fd.append("image", file);
-      // Pass the text-search box value along — backend uses it to filter
-      // (part_number gets priority, then other text columns).
+      // Backend currently performs database-only matching. Send the optional
+      // text query plus a per-upload id so every photo identification is a
+      // fresh request and stale/cached responses cannot be reused.
       fd.append("query", q.trim());
+      fd.append("upload_id", String(requestId));
       const data = await apiForm("/identify", fd);
+      if (identifyRequestRef.current !== requestId) return;
 
       // Save to local history (skipped automatically if query was empty).
       setHistory(addHistory({
@@ -688,18 +699,21 @@ function Home({ onResults, onIdentifyResults, subscription }) {
 
       if (data.results?.length === 0) {
         setErr(
-          q.trim()
+          data.message ||
+          (q.trim()
             ? `No parts matched "${q.trim()}". Try a different part number, brand, or description.`
-            : "Type a part number, brand, or description in the search box below, then tap Identify again."
+            : "No database match found for this upload. Add a part number, brand, or description to narrow the database search.")
         );
       } else {
-        onIdentifyResults(data.results, data.search_terms_used);
+        onIdentifyResults(data.results, data.search_terms_used, data.query_used);
       }
     } catch (e) {
+      if (identifyRequestRef.current !== requestId) return;
       if (e.status === 429) { onResults([], "", true); return; }
       setErr(e.error || "Identification failed. Try again.");
+    } finally {
+      if (identifyRequestRef.current === requestId) setUploading(false);
     }
-    setUploading(false);
   }
 
   async function search(overrideQ) {
@@ -751,7 +765,13 @@ function Home({ onResults, onIdentifyResults, subscription }) {
           {preview ? (
             <>
               <img src={preview} className="upload-preview" alt="Selected spare part" />
-              <button className="upload-change" onClick={e => { e.stopPropagation(); setPreview(null); setFile(null); }}>
+              <button className="upload-change" onClick={e => {
+                e.stopPropagation();
+                if (preview) URL.revokeObjectURL(preview);
+                setPreview(null);
+                setFile(null);
+                if (fileRef.current) fileRef.current.value = "";
+              }}>
                 Change photo
               </button>
             </>
@@ -1081,7 +1101,7 @@ export default function App() {
       const params = new URLSearchParams(hash.replace(/^#/, ""));
       const accessToken = params.get("access_token");
       if (accessToken) {
-        setRecoveryToken(accessToken);
+        setTimeout(() => setRecoveryToken(accessToken), 0);
         window.history.replaceState(null, "", window.location.pathname + window.location.search);
       }
     }
@@ -1099,7 +1119,7 @@ export default function App() {
         .catch(() => localStorage.removeItem("as_user_token"))
         .finally(() => setLoadingMe(false));
     } else {
-      setLoadingMe(false);
+      setTimeout(() => setLoadingMe(false), 0);
     }
   }, []);
 
@@ -1178,7 +1198,7 @@ export default function App() {
       {screen === "home" && (
         <Home
           onResults={handleResults}
-          onIdentifyResults={(res, terms) => handleResults(res, terms?.join(", ") || "Photo", false, res.length)}
+          onIdentifyResults={(res, terms, queryUsed) => handleResults(res, queryUsed || terms?.join(", ") || "Photo", false, res.length)}
           subscription={subscription}
         />
       )}
