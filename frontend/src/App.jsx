@@ -692,33 +692,17 @@ function Home({ onResults, onIdentifyResults, subscription }) {
       // the text-search box value here; stale text/history can make the
       // backend return the same DB search results for every photo.
       fd.append("upload_id", String(requestId));
-      const data = await apiForm("/identify", fd);
-      if (identifyRequestRef.current !== requestId) return;
-      // Backend currently performs database-only matching. Send the optional
-      // text query plus a per-upload id so every photo identification is a
-      // fresh request and stale/cached responses cannot be reused.
-      fd.append("query", q.trim());
-      fd.append("upload_id", String(requestId));
-      const data = await apiForm("/identify", fd);
+      const identifyData = await apiForm("/identify", fd);
       if (identifyRequestRef.current !== requestId) return;
 
-      // Save to local history (skipped automatically if query was empty).
-      setHistory(addHistory({
-        type: "identify",
-        query: q.trim(),
-        result_count: data.results?.length || 0,
-      }));
-
-      if (data.results?.length === 0) {
+      const identifyResults = identifyData.results || [];
+      if (identifyResults.length === 0) {
         setErr(
-          data.message ||
+          identifyData.message ||
           "No database match found for this uploaded photo. Try a clearer image or use text search below."
-          (q.trim()
-            ? `No parts matched "${q.trim()}". Try a different part number, brand, or description.`
-            : "No database match found for this upload. Add a part number, brand, or description to narrow the database search.")
         );
       } else {
-        onIdentifyResults(data.results, data.search_terms_used, data.query_used);
+        onIdentifyResults(identifyResults, identifyData.search_terms_used, identifyData.query_used);
       }
     } catch (e) {
       if (identifyRequestRef.current !== requestId) return;
