@@ -53,6 +53,24 @@ const HISTORY_KEY = "as_search_history";
 function loadHistory() {
   localStorage.removeItem(HISTORY_KEY);
   return [];
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    const cutoff = Date.now() - HISTORY_TTL_MS;
+    const fresh = arr.filter((e) =>
+      e &&
+      e.type === "text" &&
+      typeof e.timestamp === "number" &&
+      e.timestamp > cutoff
+    );
+    if (fresh.length !== arr.length) {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(fresh));
+    }
+    return fresh;
+  } catch {
+    return [];
+  }
 }
 
 
@@ -680,6 +698,22 @@ function Home({ onResults, onIdentifyResults, subscription }) {
       }
 
       onIdentifyResults(identifyResults, photoIdentifyResponse.search_terms_used, photoIdentifyResponse.query_used);
+      const identifyData = await apiForm("/identify", fd);
+      if (identifyRequestRef.current !== requestId) return;
+
+      const identifyResults = identifyData.results || [];
+      if (identifyData.identified === false || identifyResults.length === 0) {
+      if (identifyResults.length === 0) {
+        setErr(
+          identifyData.message ||
+          "No database match found for this uploaded photo. Try a clearer image or use text search below."
+        );
+        return;
+      } else {
+        onIdentifyResults(identifyResults, identifyData.search_terms_used, identifyData.query_used);
+      }
+
+      onIdentifyResults(identifyResults, identifyData.search_terms_used, identifyData.query_used);
     } catch (e) {
       if (identifyRequestRef.current !== requestId) return;
       if (e.status === 429) { onResults([], "", true); return; }
