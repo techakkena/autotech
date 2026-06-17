@@ -59,7 +59,12 @@ function loadHistory() {
     if (!raw) return [];
     const arr = JSON.parse(raw);
     const cutoff = Date.now() - HISTORY_TTL_MS;
-    const fresh = arr.filter((e) => e && typeof e.timestamp === "number" && e.timestamp > cutoff);
+    const fresh = arr.filter((e) =>
+      e &&
+      e.type === "text" &&
+      typeof e.timestamp === "number" &&
+      e.timestamp > cutoff
+    );
     if (fresh.length !== arr.length) {
       localStorage.setItem(HISTORY_KEY, JSON.stringify(fresh));
     }
@@ -671,6 +676,7 @@ function Home({ onResults, onIdentifyResults, subscription }) {
     if (preview) URL.revokeObjectURL(preview);
     setFile(f);
     setPreview(URL.createObjectURL(f));
+    setQ("");
     setErr("");
   }
 
@@ -682,6 +688,12 @@ function Home({ onResults, onIdentifyResults, subscription }) {
     try {
       const fd = new FormData();
       fd.append("image", file);
+      // Photo identification must use only this uploaded image. Do not pass
+      // the text-search box value here; stale text/history can make the
+      // backend return the same DB search results for every photo.
+      fd.append("upload_id", String(requestId));
+      const data = await apiForm("/identify", fd);
+      if (identifyRequestRef.current !== requestId) return;
       // Backend currently performs database-only matching. Send the optional
       // text query plus a per-upload id so every photo identification is a
       // fresh request and stale/cached responses cannot be reused.
@@ -700,6 +712,7 @@ function Home({ onResults, onIdentifyResults, subscription }) {
       if (data.results?.length === 0) {
         setErr(
           data.message ||
+          "No database match found for this uploaded photo. Try a clearer image or use text search below."
           (q.trim()
             ? `No parts matched "${q.trim()}". Try a different part number, brand, or description.`
             : "No database match found for this upload. Add a part number, brand, or description to narrow the database search.")
@@ -770,6 +783,7 @@ function Home({ onResults, onIdentifyResults, subscription }) {
                 if (preview) URL.revokeObjectURL(preview);
                 setPreview(null);
                 setFile(null);
+                setQ("");
                 if (fileRef.current) fileRef.current.value = "";
               }}>
                 Change photo
