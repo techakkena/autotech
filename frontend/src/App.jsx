@@ -10,7 +10,7 @@
 //   • Limit Wall  — upgrade prompt when free tier used up
 // ============================================================
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 
 const API = import.meta.env.VITE_API_URL || "/api";
 
@@ -27,10 +27,17 @@ async function api(path, options = {}) {
 
 async function apiForm(path, formData) {
   const token = localStorage.getItem("as_user_token");
-  const res = await fetch(`${API}${path}`, {
+  const headers = {
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const separator = path.includes("?") ? "&" : "?";
+  const res = await fetch(`${API}${path}${separator}_=${Date.now()}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    headers,
     body: formData,
+    cache: "no-store",
   });
   const data = await res.json();
   if (!res.ok) throw { status: res.status, ...data };
@@ -52,7 +59,12 @@ function loadHistory() {
     if (!raw) return [];
     const arr = JSON.parse(raw);
     const cutoff = Date.now() - HISTORY_TTL_MS;
-    const fresh = arr.filter((e) => e && typeof e.timestamp === "number" && e.timestamp > cutoff);
+    const fresh = arr.filter((e) =>
+      e &&
+      e.type === "text" &&
+      typeof e.timestamp === "number" &&
+      e.timestamp > cutoff
+    );
     if (fresh.length !== arr.length) {
       localStorage.setItem(HISTORY_KEY, JSON.stringify(fresh));
     }
@@ -657,49 +669,48 @@ function Home({ onResults, onIdentifyResults, subscription }) {
   const [err, setErr] = useState("");
   const [history, setHistory] = useState(loadHistory);
   const fileRef = useRef();
-
-  // Re-filter expired entries on mount in case the tab was open >24h.
-  useEffect(() => { setHistory(loadHistory()); }, []);
+  const identifyRequestRef = useRef(0);
 
   function pickFile(f) {
     if (!f || !f.type.startsWith("image/")) return;
+    if (preview) URL.revokeObjectURL(preview);
     setFile(f);
     setPreview(URL.createObjectURL(f));
+    setQ("");
     setErr("");
   }
 
   async function identify() {
     if (!file) return;
+    const requestId = Date.now();
+    identifyRequestRef.current = requestId;
     setErr(""); setUploading(true);
     try {
       const fd = new FormData();
       fd.append("image", file);
-      // Pass the text-search box value along — backend uses it to filter
-      // (part_number gets priority, then other text columns).
-      fd.append("query", q.trim());
-      const data = await apiForm("/identify", fd);
+      // Photo identification must use only this uploaded image. Do not pass
+      // the text-search box value here; stale text/history can make the
+      // backend return the same DB search results for every photo.
+      fd.append("upload_id", String(requestId));
+      const identifyData = await apiForm("/identify", fd);
+      if (identifyRequestRef.current !== requestId) return;
 
-      // Save to local history (skipped automatically if query was empty).
-      setHistory(addHistory({
-        type: "identify",
-        query: q.trim(),
-        result_count: data.results?.length || 0,
-      }));
-
-      if (data.results?.length === 0) {
+      const identifyResults = identifyData.results || [];
+      if (identifyResults.length === 0) {
         setErr(
-          q.trim()
-            ? `No parts matched "${q.trim()}". Try a different part number, brand, or description.`
-            : "Type a part number, brand, or description in the search box below, then tap Identify again."
+          identifyData.message ||
+          "No database match found for this uploaded photo. Try a clearer image or use text search below."
         );
       } else {
-        onIdentifyResults(data.results, data.search_terms_used);
+        onIdentifyResults(identifyResults, identifyData.search_terms_used, identifyData.query_used);
       }
     } catch (e) {
+      if (identifyRequestRef.current !== requestId) return;
       if (e.status === 429) { onResults([], "", true); return; }
       setErr(e.error || "Identification failed. Try again.");
+    } finally {
+      if (identifyRequestRef.current === requestId) setUploading(false);
     }
-    setUploading(false);
   }
 
   async function search(overrideQ) {
@@ -751,7 +762,14 @@ function Home({ onResults, onIdentifyResults, subscription }) {
           {preview ? (
             <>
               <img src={preview} className="upload-preview" alt="Selected spare part" />
-              <button className="upload-change" onClick={e => { e.stopPropagation(); setPreview(null); setFile(null); }}>
+              <button className="upload-change" onClick={e => {
+                e.stopPropagation();
+                if (preview) URL.revokeObjectURL(preview);
+                setPreview(null);
+                setFile(null);
+                setQ("");
+                if (fileRef.current) fileRef.current.value = "";
+              }}>
                 Change photo
               </button>
             </>
@@ -1081,7 +1099,7 @@ export default function App() {
       const params = new URLSearchParams(hash.replace(/^#/, ""));
       const accessToken = params.get("access_token");
       if (accessToken) {
-        setRecoveryToken(accessToken);
+        setTimeout(() => setRecoveryToken(accessToken), 0);
         window.history.replaceState(null, "", window.location.pathname + window.location.search);
       }
     }
@@ -1099,7 +1117,7 @@ export default function App() {
         .catch(() => localStorage.removeItem("as_user_token"))
         .finally(() => setLoadingMe(false));
     } else {
-      setLoadingMe(false);
+      setTimeout(() => setLoadingMe(false), 0);
     }
   }, []);
 
@@ -1178,7 +1196,7 @@ export default function App() {
       {screen === "home" && (
         <Home
           onResults={handleResults}
-          onIdentifyResults={(res, terms) => handleResults(res, terms?.join(", ") || "Photo", false, res.length)}
+          onIdentifyResults={(res, terms, queryUsed) => handleResults(res, queryUsed || terms?.join(", ") || "Photo", false, res.length)}
           subscription={subscription}
         />
       )}
