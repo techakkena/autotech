@@ -4,27 +4,23 @@
 //  POST /api/identify
 //    Body: multipart/form-data
 //      image: <file>          (required — stored to Cloudinary)
-//      query: <text>          (optional — drives the DB match)
-//    Returns: spare parts matching the text query, ranked.
+//      query: <text>          (optional — extra DB search hint)
+//    Returns: spare parts matching fresh terms from this uploaded image.
 //
-//  Flow (no AI for now):
-//    1. User uploads photo + optional text (part no, brand, etc).
-//    2. Image goes to Cloudinary (kept for future image-similarity search).
-//    3. If `query` was sent, search Supabase: part_number gets highest weight,
-//       then other text columns. Multiple terms are ranked by hit count.
-//    4. If no `query` was sent, return a recent slice of the catalog so the
-//       user can browse and pick one.
-//    5. Frontend displays results in a row; user picks one → checkout flow.
-//
-//  Image-similarity matching (compare uploaded image to image_urls in DB)
-//  is deferred: it requires a perceptual-hash column + a backfill job.
+//  Flow:
+//    1. User uploads or captures a photo, optionally with text hint.
+//    2. Image goes to Cloudinary for storage.
+//    3. Google Vision OCR/labels/web entities plus filename/query terms are
+//       used to search Supabase and rank matching spare parts.
+//    4. If no terms are found, return no results with a clear message instead
+//       of showing recent/catalog items that look like cached history.
 // ============================================================
 
 import { Router } from "express";
 import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
 import { supabase } from "../lib/supabase.js";
-import { requireAuth, trackUsage, logUsage } from "../middleware/auth.js";
+import { optionalAuth, trackUsage, logUsage } from "../middleware/auth.js";
 
 const router = Router();
 
@@ -50,13 +46,14 @@ const upload = multer({
 // ── POST /api/identify ────────────────────────────────────────
 router.post(
   "/",
-  requireAuth,
+  optionalAuth,
   trackUsage,
   upload.single("image"),
   async (req, res) => {
     console.log("IDENTIFY ROUTE HIT");
     console.log("FILE:", req.file?.originalname, req.file?.size, "bytes");
     console.log("QUERY:", req.body?.query);
+    console.log("UPLOAD ID:", req.body?.upload_id);
 
     if (!req.file) {
       return res.status(400).json({ success: false, error: "No image uploaded" });
@@ -66,18 +63,25 @@ router.post(
       const cloudinaryUrl = await uploadToCloudinary(req.file.buffer);
 
       const rawQuery = (req.body?.query || "").trim();
-      const terms = tokenizeQuery(rawQuery);
+      const imageSignals = await analyzeImage(req.file.buffer);
+      const filenameTerms = tokenizeQuery(stripFileExtension(req.file.originalname || ""));
+      const terms = buildSearchTerms(rawQuery, imageSignals, filenameTerms);
+      console.log("IMAGE SIGNALS:", imageSignals);
       console.log("SEARCH TERMS:", terms);
 
       const results = terms.length > 0
         ? await searchByTerms(rawQuery, terms)
-        : await listRecentParts();
+        : [];
 
       logUsage(req, {
         action: "photo_identify",
         query: rawQuery || null,
         success: results.length > 0,
       });
+
+      res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.set("Pragma", "no-cache");
+      res.set("Expires", "0");
 
       return res.json({
         success: true,
@@ -87,7 +91,7 @@ router.post(
         search_terms_used: terms,
         results,
         message: terms.length === 0
-          ? "No search text provided — showing recent parts. Type a part number, brand, or description to narrow down."
+          ? "No readable part number or label was found in this photo. Try a clearer photo or add a part number, brand, or description in text search."
           : results.length === 0
           ? "No parts matched your search."
           : null,
@@ -123,6 +127,7 @@ function uploadToCloudinary(buffer) {
 // Numeric tokens (4+ digits) are kept — they may be part-number fragments.
 const STOPWORDS = new Set([
   "and", "the", "with", "for", "from", "into", "this", "that",
+  "image", "photo", "camera", "upload", "jpg", "jpeg", "png", "webp",
 ]);
 
 function tokenizeQuery(text) {
@@ -135,6 +140,76 @@ function tokenizeQuery(text) {
         .filter((w) => w.length >= 2 && !STOPWORDS.has(w))
     ),
   ];
+}
+
+function stripFileExtension(name) {
+  return name.replace(/\.[^.]+$/, "");
+}
+
+const IGNORE_IMAGE_TERMS = new Set([
+  "product", "object", "material", "metal", "hardware", "tool",
+  "equipment", "item", "part", "component", "auto", "automotive",
+  "black", "white", "silver", "gray", "grey", "round", "plastic",
+]);
+
+async function analyzeImage(imageBuffer) {
+  const apiKey = process.env.GOOGLE_VISION_API_KEY;
+  if (!apiKey) return { labels: [], texts: [], webLabels: [] };
+
+  try {
+    const response = await fetch(
+      `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requests: [
+            {
+              image: { content: imageBuffer.toString("base64") },
+              features: [
+                { type: "TEXT_DETECTION", maxResults: 10 },
+                { type: "LABEL_DETECTION", maxResults: 15 },
+                { type: "WEB_DETECTION", maxResults: 10 },
+              ],
+            },
+          ],
+        }),
+      }
+    );
+    const data = await response.json();
+    const resp = data.responses?.[0] || {};
+    if (data.error || resp.error) {
+      console.error("Vision API error:", data.error || resp.error);
+      return { labels: [], texts: [], webLabels: [] };
+    }
+
+    const textBlock = resp.textAnnotations?.[0]?.description || "";
+    const texts = tokenizeQuery(textBlock).filter((t) => t.length >= 3);
+    const labels = (resp.labelAnnotations || [])
+      .filter((label) => label.score >= 0.55 && label.description)
+      .flatMap((label) => tokenizeQuery(label.description));
+    const webLabels = (resp.webDetection?.webEntities || [])
+      .filter((entity) => entity.score >= 0.4 && entity.description)
+      .flatMap((entity) => tokenizeQuery(entity.description));
+
+    return { labels, texts, webLabels };
+  } catch (err) {
+    console.error("Vision API fetch error:", err.message);
+    return { labels: [], texts: [], webLabels: [] };
+  }
+}
+
+function buildSearchTerms(rawQuery, imageSignals, filenameTerms) {
+  const queryTerms = tokenizeQuery(rawQuery);
+  const imageTerms = [
+    ...(imageSignals.texts || []),
+    ...(imageSignals.webLabels || []),
+    ...(imageSignals.labels || []),
+  ].filter((term) => !IGNORE_IMAGE_TERMS.has(term));
+
+  return [...new Set([...queryTerms, ...imageTerms, ...filenameTerms])]
+    .filter((term) => term.length >= 2 && !STOPWORDS.has(term))
+    .slice(0, 12);
 }
 
 // ── Score a row against the user's query ──────────────────────
@@ -225,26 +300,6 @@ async function searchByTerms(rawQuery, terms) {
   );
 
   return ranked.map(({ row, score }) => enrichPart(row, score));
-}
-
-// ── Fallback: list recent parts when user didn't type anything ─
-async function listRecentParts(limit = 20) {
-  const { data, error } = await supabase
-    .from("spare_parts")
-    .select(
-      `id, part_number, alternate_part_number, description, application,
-       company_brand, manufacturer_name, category,
-       mrp, basic_price, gst_rate, hsn_code, image_urls, created_at`
-    )
-    .order("created_at", { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error("Supabase recent-parts error:", error.message);
-    return [];
-  }
-
-  return data.map((row) => enrichPart(row, 0));
 }
 
 // ── Shape a row for the frontend ──────────────────────────────
