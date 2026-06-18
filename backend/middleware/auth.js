@@ -39,6 +39,33 @@ export async function requireAuth(req, res, next) {
   }
 }
 
+
+// ── optionalAuth ──────────────────────────────────────────────
+//  Attaches req.user when a valid Supabase JWT is present, but never
+//  rejects anonymous or expired sessions. Use for routes that can work
+//  publicly while still tracking usage for logged-in users.
+export async function optionalAuth(req, _res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader?.startsWith("Bearer ")) {
+    return next();
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const { data, error } = await supabaseAnon.auth.getUser(token);
+    if (!error && data?.user) {
+      req.user = data.user;
+      req.token = token;
+    }
+  } catch (err) {
+    console.warn("Optional auth skipped:", err.message);
+  }
+
+  return next();
+}
+
 // ── requireAdmin ──────────────────────────────────────────────
 //  Checks the admins table. Run AFTER requireAuth.
 export async function requireAdmin(req, res, next) {

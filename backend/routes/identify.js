@@ -4,27 +4,23 @@
 //  POST /api/identify
 //    Body: multipart/form-data
 //      image: <file>          (required — stored to Cloudinary)
-//      query: <text>          (optional — drives the DB match)
-//    Returns: spare parts matching the text query, ranked.
+//      query: <text>          (optional — extra DB search hint)
+//    Returns: spare parts matching database fields for this request only.
 //
-//  Flow (no AI for now):
-//    1. User uploads photo + optional text (part no, brand, etc).
-//    2. Image goes to Cloudinary (kept for future image-similarity search).
-//    3. If `query` was sent, search Supabase: part_number gets highest weight,
-//       then other text columns. Multiple terms are ranked by hit count.
-//    4. If no `query` was sent, return a recent slice of the catalog so the
-//       user can browse and pick one.
-//    5. Frontend displays results in a row; user picks one → checkout flow.
-//
-//  Image-similarity matching (compare uploaded image to image_urls in DB)
-//  is deferred: it requires a perceptual-hash column + a backfill job.
+//  Flow:
+//    1. User uploads or captures a photo, optionally with text hint.
+//    2. Image goes to Cloudinary for storage.
+//    3. Search terms are built only from database-searchable request data:
+//       the optional text hint and the uploaded file name.
+//    4. Supabase is the only search source. No Google Vision/API image
+//       analysis is called, and no recent/catalog fallback is returned.
 // ============================================================
 
 import { Router } from "express";
 import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
 import { supabase } from "../lib/supabase.js";
-import { requireAuth, trackUsage, logUsage } from "../middleware/auth.js";
+import { optionalAuth, trackUsage, logUsage } from "../middleware/auth.js";
 
 const router = Router();
 
@@ -50,13 +46,14 @@ const upload = multer({
 // ── POST /api/identify ────────────────────────────────────────
 router.post(
   "/",
-  requireAuth,
+  optionalAuth,
   trackUsage,
   upload.single("image"),
   async (req, res) => {
     console.log("IDENTIFY ROUTE HIT");
     console.log("FILE:", req.file?.originalname, req.file?.size, "bytes");
     console.log("QUERY:", req.body?.query);
+    console.log("UPLOAD ID:", req.body?.upload_id);
 
     if (!req.file) {
       return res.status(400).json({ success: false, error: "No image uploaded" });
@@ -66,18 +63,23 @@ router.post(
       const cloudinaryUrl = await uploadToCloudinary(req.file.buffer);
 
       const rawQuery = (req.body?.query || "").trim();
-      const terms = tokenizeQuery(rawQuery);
+      const filenameTerms = tokenizeQuery(stripFileExtension(req.file.originalname || ""));
+      const terms = buildSearchTerms(rawQuery, filenameTerms);
       console.log("SEARCH TERMS:", terms);
 
       const results = terms.length > 0
         ? await searchByTerms(rawQuery, terms)
-        : await listRecentParts();
+        : [];
 
       logUsage(req, {
         action: "photo_identify",
         query: rawQuery || null,
         success: results.length > 0,
       });
+
+      res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.set("Pragma", "no-cache");
+      res.set("Expires", "0");
 
       return res.json({
         success: true,
@@ -87,7 +89,7 @@ router.post(
         search_terms_used: terms,
         results,
         message: terms.length === 0
-          ? "No search text provided — showing recent parts. Type a part number, brand, or description to narrow down."
+          ? "No database search terms were found for this upload. Add a part number, brand, or description and try again."
           : results.length === 0
           ? "No parts matched your search."
           : null,
@@ -123,6 +125,7 @@ function uploadToCloudinary(buffer) {
 // Numeric tokens (4+ digits) are kept — they may be part-number fragments.
 const STOPWORDS = new Set([
   "and", "the", "with", "for", "from", "into", "this", "that",
+  "image", "photo", "camera", "upload", "jpg", "jpeg", "png", "webp",
 ]);
 
 function tokenizeQuery(text) {
@@ -135,6 +138,18 @@ function tokenizeQuery(text) {
         .filter((w) => w.length >= 2 && !STOPWORDS.has(w))
     ),
   ];
+}
+
+function stripFileExtension(name) {
+  return name.replace(/\.[^.]+$/, "");
+}
+
+function buildSearchTerms(rawQuery, filenameTerms) {
+  const queryTerms = tokenizeQuery(rawQuery);
+
+  return [...new Set([...queryTerms, ...filenameTerms])]
+    .filter((term) => term.length >= 2 && !STOPWORDS.has(term))
+    .slice(0, 12);
 }
 
 // ── Score a row against the user's query ──────────────────────
@@ -225,26 +240,6 @@ async function searchByTerms(rawQuery, terms) {
   );
 
   return ranked.map(({ row, score }) => enrichPart(row, score));
-}
-
-// ── Fallback: list recent parts when user didn't type anything ─
-async function listRecentParts(limit = 20) {
-  const { data, error } = await supabase
-    .from("spare_parts")
-    .select(
-      `id, part_number, alternate_part_number, description, application,
-       company_brand, manufacturer_name, category,
-       mrp, basic_price, gst_rate, hsn_code, image_urls, created_at`
-    )
-    .order("created_at", { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error("Supabase recent-parts error:", error.message);
-    return [];
-  }
-
-  return data.map((row) => enrichPart(row, 0));
 }
 
 // ── Shape a row for the frontend ──────────────────────────────

@@ -7,7 +7,7 @@ import express from "express";
 import cors from "cors";
 import uploadRoutes from './routes/upload.js';
 
-// ── Required env vars — fail fast if missing ──────────────────
+// ── Required env vars — warn if missing but still bind PORT ─────
 const REQUIRED = [
   "SUPABASE_URL",
   "SUPABASE_SERVICE_KEY",
@@ -15,12 +15,14 @@ const REQUIRED = [
   "CLOUDINARY_CLOUD_NAME",
   "CLOUDINARY_API_KEY",
   "CLOUDINARY_API_SECRET",
-  "GOOGLE_VISION_API_KEY",
 ];
 const missing = REQUIRED.filter((k) => !process.env[k]);
 if (missing.length) {
-  console.error("Missing env vars:", missing.join(", "));
-  process.exit(1);
+  console.warn(
+    "Missing env vars:",
+    missing.join(", "),
+    "— starting server so Cloud Run can bind PORT; dependent routes may fail until env vars are configured."
+  );
 }
       
 import authRoutes     from "./routes/auth.js";

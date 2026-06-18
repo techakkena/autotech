@@ -20,11 +20,10 @@ const REQUIRED = [
   "CLOUDINARY_CLOUD_NAME",
   "CLOUDINARY_API_KEY",
   "CLOUDINARY_API_SECRET",
-  "GOOGLE_VISION_API_KEY",
 ];
 const missing = REQUIRED.filter((k) => !process.env[k]);
 if (missing.length) {
-  console.error("Missing env vars:", missing.join(", "));
+  console.warn("Missing env vars:", missing.join(", "));
 }
 
 const app = express();
