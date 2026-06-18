@@ -53,24 +53,6 @@ const HISTORY_KEY = "as_search_history";
 function loadHistory() {
   localStorage.removeItem(HISTORY_KEY);
   return [];
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    const cutoff = Date.now() - HISTORY_TTL_MS;
-    const fresh = arr.filter((e) =>
-      e &&
-      e.type === "text" &&
-      typeof e.timestamp === "number" &&
-      e.timestamp > cutoff
-    );
-    if (fresh.length !== arr.length) {
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(fresh));
-    }
-    return fresh;
-  } catch {
-    return [];
-  }
 }
 
 
@@ -214,6 +196,12 @@ body {
   border-radius: 7px; padding: 6px 12px; font-size: 12px;
   cursor: pointer; font-family: var(--font);
 }
+.upload-actions {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px; margin-top: 16px;
+}
+.upload-actions .btn { justify-content: center; padding: 13px; }
+@media (max-width: 520px) { .upload-actions { grid-template-columns: 1fr; } }
 
 /* ── Divider OR ── */
 .or-row {
@@ -659,7 +647,8 @@ function Home({ onResults, onIdentifyResults, subscription }) {
   const [searching, setSearching] = useState(false);
   const [err, setErr] = useState("");
   const [history, setHistory] = useState(loadHistory);
-  const fileRef = useRef();
+  const uploadFileRef = useRef();
+  const cameraFileRef = useRef();
   const identifyRequestRef = useRef(0);
 
   function pickFile(f) {
@@ -681,23 +670,19 @@ function Home({ onResults, onIdentifyResults, subscription }) {
     try {
       const fd = new FormData();
       fd.append("image", file);
-      // Photo identification must use only this uploaded image. Do not pass
-      // the text-search box value here; stale text/history can make the
-      // backend return the same DB search results for every photo.
+      const textHint = q.trim();
+      if (textHint) fd.append("query", textHint);
       fd.append("upload_id", String(requestId));
       const identifyData = await apiForm("/identify", fd);
       if (identifyRequestRef.current !== requestId) return;
 
       const identifyResults = identifyData.results || [];
       if (identifyData.identified === false || identifyResults.length === 0) {
-      if (identifyResults.length === 0) {
         setErr(
           identifyData.message ||
           "No database match found for this uploaded photo. Try a clearer image or use text search below."
         );
         return;
-      } else {
-        onIdentifyResults(identifyResults, identifyData.search_terms_used, identifyData.query_used);
       }
 
       onIdentifyResults(identifyResults, identifyData.search_terms_used, identifyData.query_used);
@@ -751,7 +736,7 @@ function Home({ onResults, onIdentifyResults, subscription }) {
       <div className="fade-up fade-up-3">
         <div
           className={`upload-zone ${drag ? "drag" : ""} ${preview ? "has-image" : ""}`}
-          onClick={() => !preview && fileRef.current.click()}
+          onClick={() => !preview && uploadFileRef.current.click()}
           onDragOver={e => { e.preventDefault(); setDrag(true); }}
           onDragLeave={() => setDrag(false)}
           onDrop={e => { e.preventDefault(); setDrag(false); pickFile(e.dataTransfer.files[0]); }}
@@ -765,7 +750,8 @@ function Home({ onResults, onIdentifyResults, subscription }) {
                 setPreview(null);
                 setFile(null);
                 setQ("");
-                if (fileRef.current) fileRef.current.value = "";
+                if (uploadFileRef.current) uploadFileRef.current.value = "";
+                if (cameraFileRef.current) cameraFileRef.current.value = "";
               }}>
                 Change photo
               </button>
@@ -773,13 +759,26 @@ function Home({ onResults, onIdentifyResults, subscription }) {
           ) : (
             <>
               <span className="upload-icon">📷</span>
-              <div className="upload-title">Take or upload a photo</div>
-              <div className="upload-sub">Tap to open camera · or drag an image here</div>
+              <div className="upload-title">Upload or take a photo</div>
+              <div className="upload-sub">Drag an image here, or choose one of the options below</div>
             </>
           )}
         </div>
-        <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden
+        <input ref={uploadFileRef} type="file" accept="image/*" hidden
           onChange={e => pickFile(e.target.files[0])} />
+        <input ref={cameraFileRef} type="file" accept="image/*" capture="environment" hidden
+          onChange={e => pickFile(e.target.files[0])} />
+
+        {!preview && (
+          <div className="upload-actions">
+            <button type="button" className="btn btn-outline" onClick={() => uploadFileRef.current?.click()}>
+              🖼️ Upload photo
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => cameraFileRef.current?.click()}>
+              📷 Take photo
+            </button>
+          </div>
+        )}
 
         {preview && (
           <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center", padding: "13px" }}
