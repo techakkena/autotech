@@ -12,7 +12,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
-import { supabase } from "../server.js";
+import { supabase } from "../lib/supabase.js";
 import { requireAuth, trackUsage } from "../middleware/auth.js";
 
 const router = Router();

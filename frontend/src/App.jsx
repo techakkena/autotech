@@ -10,7 +10,7 @@
 //   • Limit Wall  — upgrade prompt when free tier used up
 // ============================================================
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 
 const API = import.meta.env.VITE_API_URL || "/api";
 
@@ -27,10 +27,17 @@ async function api(path, options = {}) {
 
 async function apiForm(path, formData) {
   const token = localStorage.getItem("as_user_token");
-  const res = await fetch(`${API}${path}`, {
+  const headers = {
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const separator = path.includes("?") ? "&" : "?";
+  const res = await fetch(`${API}${path}${separator}_=${Date.now()}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    headers,
     body: formData,
+    cache: "no-store",
   });
   const data = await res.json();
   if (!res.ok) throw { status: res.status, ...data };
@@ -41,41 +48,19 @@ async function apiForm(path, formData) {
 const inr = (n) =>
   "₹" + parseFloat(n).toLocaleString("en-IN", { minimumFractionDigits: 2 });
 
-// ── Search history (localStorage, 24h TTL, max 20 entries) ────
+// ── Search history disabled: always clear localStorage-backed history ────
 const HISTORY_KEY = "as_search_history";
-const HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
-const HISTORY_MAX = 20;
-
 function loadHistory() {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    const cutoff = Date.now() - HISTORY_TTL_MS;
-    const fresh = arr.filter((e) => e && typeof e.timestamp === "number" && e.timestamp > cutoff);
-    if (fresh.length !== arr.length) {
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(fresh));
-    }
-    return fresh;
-  } catch {
-    return [];
-  }
+  localStorage.removeItem(HISTORY_KEY);
+  return [];
 }
 
-function addHistory(entry) {
-  if (!entry?.query?.trim()) return loadHistory(); // skip empty searches
-  const existing = loadHistory();
-  // De-duplicate by (type, query) — bump the matching entry to the top.
-  const filtered = existing.filter(
-    (e) => !(e.type === entry.type && e.query === entry.query)
-  );
-  const next = [
-    { ...entry, timestamp: Date.now() },
-    ...filtered,
-  ].slice(0, HISTORY_MAX);
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
-  return next;
+
+function addHistory() {
+  localStorage.removeItem(HISTORY_KEY);
+  return [];
 }
+
 
 function clearHistory() {
   localStorage.removeItem(HISTORY_KEY);
@@ -211,6 +196,12 @@ body {
   border-radius: 7px; padding: 6px 12px; font-size: 12px;
   cursor: pointer; font-family: var(--font);
 }
+.upload-actions {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px; margin-top: 16px;
+}
+.upload-actions .btn { justify-content: center; padding: 13px; }
+@media (max-width: 520px) { .upload-actions { grid-template-columns: 1fr; } }
 
 /* ── Divider OR ── */
 .or-row {
@@ -656,50 +647,52 @@ function Home({ onResults, onIdentifyResults, subscription }) {
   const [searching, setSearching] = useState(false);
   const [err, setErr] = useState("");
   const [history, setHistory] = useState(loadHistory);
-  const fileRef = useRef();
-
-  // Re-filter expired entries on mount in case the tab was open >24h.
-  useEffect(() => { setHistory(loadHistory()); }, []);
+  const uploadFileRef = useRef();
+  const cameraFileRef = useRef();
+  const identifyRequestRef = useRef(0);
 
   function pickFile(f) {
     if (!f || !f.type.startsWith("image/")) return;
+    if (preview) URL.revokeObjectURL(preview);
     setFile(f);
     setPreview(URL.createObjectURL(f));
+    setQ("");
     setErr("");
   }
 
   async function identify() {
     if (!file) return;
+    const requestId = Date.now();
+    identifyRequestRef.current = requestId;
+    clearHistory();
+    setHistory([]);
     setErr(""); setUploading(true);
     try {
       const fd = new FormData();
       fd.append("image", file);
-      // Pass the text-search box value along — backend uses it to filter
-      // (part_number gets priority, then other text columns).
-      fd.append("query", q.trim());
-      const data = await apiForm("/identify", fd);
+      const textHint = q.trim();
+      if (textHint) fd.append("query", textHint);
+      fd.append("upload_id", String(requestId));
+      const identifyData = await apiForm("/identify", fd);
+      if (identifyRequestRef.current !== requestId) return;
 
-      // Save to local history (skipped automatically if query was empty).
-      setHistory(addHistory({
-        type: "identify",
-        query: q.trim(),
-        result_count: data.results?.length || 0,
-      }));
-
-      if (data.results?.length === 0) {
+      const identifyResults = identifyData.results || [];
+      if (identifyData.identified === false || identifyResults.length === 0) {
         setErr(
-          q.trim()
-            ? `No parts matched "${q.trim()}". Try a different part number, brand, or description.`
-            : "Type a part number, brand, or description in the search box below, then tap Identify again."
+          identifyData.message ||
+          "No database match found for this uploaded photo. Try a clearer image or use text search below."
         );
-      } else {
-        onIdentifyResults(data.results, data.search_terms_used);
+        return;
       }
+
+      onIdentifyResults(identifyResults, identifyData.search_terms_used, identifyData.query_used);
     } catch (e) {
+      if (identifyRequestRef.current !== requestId) return;
       if (e.status === 429) { onResults([], "", true); return; }
       setErr(e.error || "Identification failed. Try again.");
+    } finally {
+      if (identifyRequestRef.current === requestId) setUploading(false);
     }
-    setUploading(false);
   }
 
   async function search(overrideQ) {
@@ -743,7 +736,7 @@ function Home({ onResults, onIdentifyResults, subscription }) {
       <div className="fade-up fade-up-3">
         <div
           className={`upload-zone ${drag ? "drag" : ""} ${preview ? "has-image" : ""}`}
-          onClick={() => !preview && fileRef.current.click()}
+          onClick={() => !preview && uploadFileRef.current.click()}
           onDragOver={e => { e.preventDefault(); setDrag(true); }}
           onDragLeave={() => setDrag(false)}
           onDrop={e => { e.preventDefault(); setDrag(false); pickFile(e.dataTransfer.files[0]); }}
@@ -751,20 +744,41 @@ function Home({ onResults, onIdentifyResults, subscription }) {
           {preview ? (
             <>
               <img src={preview} className="upload-preview" alt="Selected spare part" />
-              <button className="upload-change" onClick={e => { e.stopPropagation(); setPreview(null); setFile(null); }}>
+              <button className="upload-change" onClick={e => {
+                e.stopPropagation();
+                if (preview) URL.revokeObjectURL(preview);
+                setPreview(null);
+                setFile(null);
+                setQ("");
+                if (uploadFileRef.current) uploadFileRef.current.value = "";
+                if (cameraFileRef.current) cameraFileRef.current.value = "";
+              }}>
                 Change photo
               </button>
             </>
           ) : (
             <>
               <span className="upload-icon">📷</span>
-              <div className="upload-title">Take or upload a photo</div>
-              <div className="upload-sub">Tap to open camera · or drag an image here</div>
+              <div className="upload-title">Upload or take a photo</div>
+              <div className="upload-sub">Drag an image here, or choose one of the options below</div>
             </>
           )}
         </div>
-        <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden
+        <input ref={uploadFileRef} type="file" accept="image/*" hidden
           onChange={e => pickFile(e.target.files[0])} />
+        <input ref={cameraFileRef} type="file" accept="image/*" capture="environment" hidden
+          onChange={e => pickFile(e.target.files[0])} />
+
+        {!preview && (
+          <div className="upload-actions">
+            <button type="button" className="btn btn-outline" onClick={() => uploadFileRef.current?.click()}>
+              🖼️ Upload photo
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => cameraFileRef.current?.click()}>
+              📷 Take photo
+            </button>
+          </div>
+        )}
 
         {preview && (
           <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center", padding: "13px" }}
@@ -1081,7 +1095,7 @@ export default function App() {
       const params = new URLSearchParams(hash.replace(/^#/, ""));
       const accessToken = params.get("access_token");
       if (accessToken) {
-        setRecoveryToken(accessToken);
+        setTimeout(() => setRecoveryToken(accessToken), 0);
         window.history.replaceState(null, "", window.location.pathname + window.location.search);
       }
     }
@@ -1099,7 +1113,7 @@ export default function App() {
         .catch(() => localStorage.removeItem("as_user_token"))
         .finally(() => setLoadingMe(false));
     } else {
-      setLoadingMe(false);
+      setTimeout(() => setLoadingMe(false), 0);
     }
   }, []);
 
@@ -1178,7 +1192,7 @@ export default function App() {
       {screen === "home" && (
         <Home
           onResults={handleResults}
-          onIdentifyResults={(res, terms) => handleResults(res, terms?.join(", ") || "Photo", false, res.length)}
+          onIdentifyResults={(res, terms, queryUsed) => handleResults(res, queryUsed || terms?.join(", ") || "Photo", false, res.length)}
           subscription={subscription}
         />
       )}
