@@ -15,7 +15,6 @@ const REQUIRED = [
   "CLOUDINARY_CLOUD_NAME",
   "CLOUDINARY_API_KEY",
   "CLOUDINARY_API_SECRET",
-  "GOOGLE_VISION_API_KEY",
 ];
 const missing = REQUIRED.filter((k) => !process.env[k]);
 if (missing.length) {

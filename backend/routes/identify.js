@@ -5,15 +5,15 @@
 //    Body: multipart/form-data
 //      image: <file>          (required — stored to Cloudinary)
 //      query: <text>          (optional — extra DB search hint)
-//    Returns: spare parts matching fresh terms from this uploaded image.
+//    Returns: spare parts matching database fields for this request only.
 //
 //  Flow:
 //    1. User uploads or captures a photo, optionally with text hint.
 //    2. Image goes to Cloudinary for storage.
-//    3. Google Vision OCR/labels/web entities plus filename/query terms are
-//       used to search Supabase and rank matching spare parts.
-//    4. If no terms are found, return no results with a clear message instead
-//       of showing recent/catalog items that look like cached history.
+//    3. Search terms are built only from database-searchable request data:
+//       the optional text hint and the uploaded file name.
+//    4. Supabase is the only search source. No Google Vision/API image
+//       analysis is called, and no recent/catalog fallback is returned.
 // ============================================================
 
 import { Router } from "express";
@@ -63,10 +63,8 @@ router.post(
       const cloudinaryUrl = await uploadToCloudinary(req.file.buffer);
 
       const rawQuery = (req.body?.query || "").trim();
-      const imageSignals = await analyzeImage(req.file.buffer);
       const filenameTerms = tokenizeQuery(stripFileExtension(req.file.originalname || ""));
-      const terms = buildSearchTerms(rawQuery, imageSignals, filenameTerms);
-      console.log("IMAGE SIGNALS:", imageSignals);
+      const terms = buildSearchTerms(rawQuery, filenameTerms);
       console.log("SEARCH TERMS:", terms);
 
       const results = terms.length > 0
@@ -91,7 +89,7 @@ router.post(
         search_terms_used: terms,
         results,
         message: terms.length === 0
-          ? "No readable part number or label was found in this photo. Try a clearer photo or add a part number, brand, or description in text search."
+          ? "No database search terms were found for this upload. Add a part number, brand, or description and try again."
           : results.length === 0
           ? "No parts matched your search."
           : null,
@@ -146,68 +144,10 @@ function stripFileExtension(name) {
   return name.replace(/\.[^.]+$/, "");
 }
 
-const IGNORE_IMAGE_TERMS = new Set([
-  "product", "object", "material", "metal", "hardware", "tool",
-  "equipment", "item", "part", "component", "auto", "automotive",
-  "black", "white", "silver", "gray", "grey", "round", "plastic",
-]);
-
-async function analyzeImage(imageBuffer) {
-  const apiKey = process.env.GOOGLE_VISION_API_KEY;
-  if (!apiKey) return { labels: [], texts: [], webLabels: [] };
-
-  try {
-    const response = await fetch(
-      `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          requests: [
-            {
-              image: { content: imageBuffer.toString("base64") },
-              features: [
-                { type: "TEXT_DETECTION", maxResults: 10 },
-                { type: "LABEL_DETECTION", maxResults: 15 },
-                { type: "WEB_DETECTION", maxResults: 10 },
-              ],
-            },
-          ],
-        }),
-      }
-    );
-    const data = await response.json();
-    const resp = data.responses?.[0] || {};
-    if (data.error || resp.error) {
-      console.error("Vision API error:", data.error || resp.error);
-      return { labels: [], texts: [], webLabels: [] };
-    }
-
-    const textBlock = resp.textAnnotations?.[0]?.description || "";
-    const texts = tokenizeQuery(textBlock).filter((t) => t.length >= 3);
-    const labels = (resp.labelAnnotations || [])
-      .filter((label) => label.score >= 0.55 && label.description)
-      .flatMap((label) => tokenizeQuery(label.description));
-    const webLabels = (resp.webDetection?.webEntities || [])
-      .filter((entity) => entity.score >= 0.4 && entity.description)
-      .flatMap((entity) => tokenizeQuery(entity.description));
-
-    return { labels, texts, webLabels };
-  } catch (err) {
-    console.error("Vision API fetch error:", err.message);
-    return { labels: [], texts: [], webLabels: [] };
-  }
-}
-
-function buildSearchTerms(rawQuery, imageSignals, filenameTerms) {
+function buildSearchTerms(rawQuery, filenameTerms) {
   const queryTerms = tokenizeQuery(rawQuery);
-  const imageTerms = [
-    ...(imageSignals.texts || []),
-    ...(imageSignals.webLabels || []),
-    ...(imageSignals.labels || []),
-  ].filter((term) => !IGNORE_IMAGE_TERMS.has(term));
 
-  return [...new Set([...queryTerms, ...imageTerms, ...filenameTerms])]
+  return [...new Set([...queryTerms, ...filenameTerms])]
     .filter((term) => term.length >= 2 && !STOPWORDS.has(term))
     .slice(0, 12);
 }
