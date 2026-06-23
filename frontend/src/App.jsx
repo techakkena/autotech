@@ -284,13 +284,30 @@ body {
   display: flex; align-items: center; justify-content: center;
   font-size: 48px;
 }
-.part-body { padding: 14px; }
-.part-num { font-family: var(--display); font-size: 11px; font-weight: 600; color: var(--accent); letter-spacing: .06em; text-transform: uppercase; margin-bottom: 4px; }
-.part-name { font-weight: 500; font-size: 14px; line-height: 1.4; margin-bottom: 6px; color: var(--ink); }
+.part-body { padding: 14px 16px 16px; }
+.part-num {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 12px; font-weight: 700;
+  color: var(--accent); letter-spacing: .1em; text-transform: uppercase;
+  margin-bottom: 5px; display: inline-block;
+}
+.part-num::before { content: '# '; color: var(--ink3); font-weight: 400; }
+.part-name { font-weight: 500; font-size: 14px; line-height: 1.4; margin-bottom: 5px; color: var(--ink); }
 .part-brand { font-size: 12px; color: var(--ink3); margin-bottom: 10px; }
-.part-price-row { display: flex; align-items: baseline; justify-content: space-between; }
-.part-mrp { font-family: var(--display); font-size: 18px; font-weight: 700; color: var(--ink); }
-.part-gst { font-size: 11px; color: var(--ink3); }
+.part-price-divider { border: none; border-top: 1px solid var(--border); margin: 10px 0 9px; }
+.part-price-meta { display: flex; align-items: center; justify-content: space-between; margin-bottom: 3px; }
+.part-price-label { font-family: var(--font); font-size: 11px; font-style: italic; font-weight: 400; color: var(--ink2); letter-spacing: 0; }
+.part-price-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.part-mrp {
+  font-family: var(--display); font-size: 21px; font-weight: 800;
+  color: var(--ink); letter-spacing: -.3px;
+  font-variant-numeric: tabular-nums; line-height: 1;
+}
+.part-gst {
+  font-size: 10px; font-weight: 700; letter-spacing: .04em;
+  color: var(--accent); background: rgba(200,64,26,.09);
+  padding: 2px 7px; border-radius: 20px; white-space: nowrap;
+}
 .part-cat { font-size: 11px; padding: 2px 8px; border-radius: 20px; background: var(--bg3); color: var(--ink2); display: inline-block; margin-bottom: 8px; }
 
 /* ── Part Detail ── */
@@ -303,14 +320,20 @@ body {
 .detail-body { padding: 24px; }
 .detail-toprow { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
 .detail-name { font-family: var(--display); font-size: 22px; font-weight: 700; line-height: 1.2; }
-.detail-partno { font-size: 12px; color: var(--accent); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 4px; }
+.detail-partno {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 13px; color: var(--accent); font-weight: 700;
+  letter-spacing: .1em; text-transform: uppercase; margin-bottom: 5px;
+}
+.detail-partno::before { content: '# '; color: var(--ink3); font-weight: 400; }
 .detail-brand { font-size: 14px; color: var(--ink2); margin-bottom: 16px; }
 .detail-divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
-.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .detail-field { }
-.df-label { font-size: 11px; color: var(--ink3); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 3px; }
-.df-val { font-size: 15px; font-weight: 500; color: var(--ink); }
-.df-val.price { font-family: var(--display); font-size: 22px; font-weight: 800; color: var(--accent); }
+.df-label { font-family: var(--font); font-size: 11px; font-style: italic; font-weight: 400; color: var(--ink2); letter-spacing: 0; margin-bottom: 4px; }
+.df-val { font-size: 15px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.df-val.price { font-family: var(--display); font-size: 26px; font-weight: 800; color: var(--accent); letter-spacing: -.4px; font-variant-numeric: tabular-nums; }
+.df-val.mono { font-family: 'Courier New', Courier, monospace; font-size: 13px; letter-spacing: .05em; }
 .detail-app { background: var(--bg2); border-radius: 9px; padding: 12px 14px; margin-top: 16px; font-size: 13px; color: var(--ink2); line-height: 1.6; }
 .detail-app-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink3); margin-bottom: 4px; }
 
@@ -878,10 +901,12 @@ function Results({ results, query, total, onSelect, onBack }) {
                   {p.manufacturer_name && <span style={{ color: "var(--ink3)" }}> · {p.manufacturer_name}</span>}
                 </div>
                 {p.category && <span className="part-cat">{p.category}</span>}
-                <div className="part-price-row">
-                  <div className="part-mrp">{inr(p.mrp)}</div>
-                  <div className="part-gst">GST {p.gst_rate}%</div>
+                <hr className="part-price-divider" />
+                <div className="part-price-meta">
+                  <span className="part-price-label">MRP incl. GST</span>
+                  {p.gst_rate && <span className="part-gst">GST {p.gst_rate}%</span>}
                 </div>
+                <div className="part-mrp">{inr(p.mrp)}</div>
               </div>
             </div>
           ))}
@@ -965,13 +990,13 @@ function Detail({ partId, partPreview, onBack }) {
             {part.hsn_code && (
               <div className="detail-field">
                 <div className="df-label">HSN code</div>
-                <div className="df-val" style={{ fontFamily: "monospace" }}>{part.hsn_code}</div>
+                <div className="df-val mono">{part.hsn_code}</div>
               </div>
             )}
             {part.alternate_part_number && (
               <div className="detail-field" style={{ gridColumn: "1 / -1" }}>
                 <div className="df-label">Alternate part number</div>
-                <div className="df-val" style={{ fontFamily: "monospace" }}>{part.alternate_part_number}</div>
+                <div className="df-val mono">{part.alternate_part_number}</div>
               </div>
             )}
           </div>

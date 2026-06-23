@@ -67,7 +67,8 @@
       "PowerShell(Get-ChildItem -Path \"C:\\\\AIProjects2026\\\\autotech\\\\backend\" -Recurse -Depth 1 | Select-Object FullName, Mode | Where-Object {$_.Mode -match \"^[d-]\"} | Select-Object -First 20)",
       "PowerShell(Get-ChildItem -Path \"C:\\\\AIProjects2026\\\\autotech\\\\admin\" -Recurse -Depth 1 | Select-Object FullName, Mode | Where-Object {$_.Mode -match \"^[d-]\"} | Select-Object -First 20)",
       "PowerShell(Get-ChildItem -Path \"C:\\\\AIProjects2026\\\\autotech\\\\admin\\\\src\" -Recurse | Select-Object FullName | Where-Object {$_.FullName -match \"\\\\.\\(jsx|tsx|js|ts\\)$\"})",
-      "Skill(claude-api)"
+      "Skill(claude-api)",
+      "PowerShell(Get-ChildItem \"C:\\\\AIProjects2026\\\\autotech\\\\admin\\\\src\" -Recurse | Where-Object { $_.Name -match \"App\\\\.jsx\" } | Select-Object FullName)"
     ]
   }
 }

@@ -753,8 +753,11 @@ function BulkImport({ onImported }) {
         body: JSON.stringify({ rows }),
       });
       setResult(data);
-      toast(`Imported ${data.inserted} parts (${data.skipped} skipped)`);
-      if (data.inserted > 0) onImported?.();
+      const msg = data.updated > 0
+        ? `Imported ${data.inserted} new + ${data.updated} updated (${data.skipped} skipped)`
+        : `Imported ${data.inserted} parts (${data.skipped} skipped)`;
+      toast(msg);
+      if (data.inserted > 0 || data.updated > 0) onImported?.();
     } catch (e) {
       toast(e.message, "error");
     } finally {
@@ -856,7 +859,7 @@ function BulkImport({ onImported }) {
             <button type="button" className="btn btn-primary" onClick={submitImport} disabled={!canSubmit}>
               {loading
                 ? <><div className="spinner" /> Importing…</>
-                : `Import ${rows.length - validationErrors.length} parts`}
+                : `Import / Update ${rows.length - validationErrors.length} parts`}
             </button>
           </div>
         </>
@@ -864,7 +867,11 @@ function BulkImport({ onImported }) {
 
       {result && (
         <div style={{ marginTop: 14, padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg3)", fontSize: 13 }}>
-          <div><strong>Inserted:</strong> {result.inserted} · <strong>Skipped:</strong> {result.skipped} of {result.total_rows} total</div>
+          <div>
+            <strong>Inserted:</strong> {result.inserted}
+            {result.updated > 0 && <> · <strong>Updated:</strong> {result.updated}</>}
+            {" · "}<strong>Skipped:</strong> {result.skipped} of {result.total_rows} total
+          </div>
           {result.skipped_details?.length > 0 && (
             <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)", maxHeight: 140, overflowY: "auto" }}>
               {result.skipped_details.slice(0, 30).map((s, i) => (

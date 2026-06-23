@@ -3,33 +3,23 @@
 //
 //  POST /api/identify
 //    Body: multipart/form-data
-//      image: <file>          (required — stored to Cloudinary)
+//      image: <file>          (required — held in memory only, not stored)
 //      query: <text>          (optional — extra DB search hint)
 //    Returns: spare parts matching database fields for this request only.
 //
 //  Flow:
 //    1. User uploads or captures a photo, optionally with text hint.
-//    2. Image goes to Cloudinary for storage.
-//    3. Search terms are built only from database-searchable request data:
-//       the optional text hint and the uploaded file name.
-//    4. Supabase is the only search source. No Google Vision/API image
-//       analysis is called, and no recent/catalog fallback is returned.
+//    2. Image buffer is passed directly to Google Vision (never stored).
+//    3. Search terms are built from Vision labels/text + text hint + filename.
+//    4. Supabase is the only search source.
 // ============================================================
 
 import { Router } from "express";
 import multer from "multer";
-import { v2 as cloudinary } from "cloudinary";
 import { supabase } from "../lib/supabase.js";
 //import { optionalAuth, trackUsage, logUsage } from "../middleware/auth.js";
 import { requireAuth, trackUsage, logUsage } from "../middleware/auth.js";
 const router = Router();
-
-// ── Configure Cloudinary ──────────────────────────────────────
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key:    process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
 
 // ── Multer: in-memory upload (no temp files) ──────────────────
 const upload = multer({
@@ -59,24 +49,25 @@ router.post(
     }
 
     try {
-      const cloudinaryUrl = await uploadToCloudinary(req.file.buffer);
-
       const rawQuery = (req.body?.query || "").trim();
       const filenameTerms = tokenizeQuery(stripFileExtension(req.file.originalname || ""));
-      //const terms = buildSearchTerms(rawQuery, filenameTerms);
       const imageSignals = await analyzeImage(req.file.buffer);
-      //const filenameTerms = tokenizeQuery(stripFileExtension(req.file.originalname || ""));
       const terms = buildSearchTerms(rawQuery, imageSignals, filenameTerms);
       console.log("IMAGE SIGNALS:", imageSignals);
       console.log("SEARCH TERMS:", terms);
 
+      // Derive the best part-number-like query for scoring when no text hint is given.
+      // This gives the +1000/+5000 exact-match bonus to the right part — same as text search.
+      const effectiveQuery = rawQuery || derivePartNumberQuery(filenameTerms, imageSignals.texts || []);
+      console.log("EFFECTIVE QUERY:", effectiveQuery);
+
       const results = terms.length > 0
-        ? await searchByTerms(rawQuery, terms)
+        ? await searchByTerms(effectiveQuery, terms)
         : [];
 
       logUsage(req, {
         action: "photo_identify",
-        query: rawQuery || null,
+        query: effectiveQuery || null,
         success: results.length > 0,
       });
 
@@ -85,19 +76,18 @@ router.post(
       res.set("Expires", "0");
 
       return res.json({
-  success: true,
-  identified: terms.length > 0 && results.length > 0,
-  cloudinary_url: cloudinaryUrl,
-  query_used: rawQuery || null,
-  search_terms_used: terms,
-  results,
-  message:
-    terms.length === 0
-      ? "No database search terms were found for this upload. Add a part number, brand, or description and try again."
-      : results.length === 0
-      ? "No parts matched your search. Try a clearer photo or add a part number, brand, or description in text search."
-      : null,
-});
+        success: true,
+        identified: terms.length > 0 && results.length > 0,
+        query_used: rawQuery || null,
+        search_terms_used: terms,
+        results,
+        message:
+          terms.length === 0
+            ? "No database search terms were found for this upload. Add a part number, brand, or description and try again."
+            : results.length === 0
+            ? "No parts matched your search. Try a clearer photo or add a part number, brand, or description in text search."
+            : null,
+      });
     } catch (err) {
       console.error("Identify error:", err.message);
       logUsage(req, { action: "photo_identify", query: null, success: false });
@@ -105,24 +95,6 @@ router.post(
     }
   }
 );
-
-// ── Helper: Upload buffer to Cloudinary ──────────────────────
-function uploadToCloudinary(buffer) {
-  return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      {
-        folder: "autospares/user-uploads",
-        resource_type: "image",
-        invalidate: true,
-      },
-      (error, result) => {
-        if (error) return reject(error);
-        resolve(result.secure_url);
-      }
-    );
-    stream.end(buffer);
-  });
-}
 
 // ── Tokenize the user's text query ────────────────────────────
 // Split on non-alphanumeric, lowercase, drop very short stopwords.
@@ -153,6 +125,26 @@ const IGNORE_IMAGE_TERMS = new Set([
   "equipment", "item", "part", "component", "auto", "automotive",
   "black", "white", "silver", "gray", "grey", "round", "plastic",
 ]);
+
+// Returns true when a token looks like a part number (letters + digits, not a generic word).
+function looksLikePartNumber(term) {
+  return (
+    term.length >= 4 &&
+    /[a-z]/.test(term) &&
+    /[0-9]/.test(term) &&
+    !/^(img|dsc|cam|pic|photo|scan|copy|file|jpeg|webp)\d+$/.test(term)
+  );
+}
+
+// Pick the best "query" from filename tokens or OCR text, preferring the filename.
+// This is used as the effective rawQuery so the +1000/+5000 scoring bonus fires.
+function derivePartNumberQuery(filenameTerms, ocrTexts) {
+  const fnParts = filenameTerms.filter(looksLikePartNumber);
+  if (fnParts.length > 0) return fnParts[0];
+  const ocrParts = ocrTexts.filter(looksLikePartNumber);
+  if (ocrParts.length > 0) return ocrParts[0];
+  return "";
+}
 
 async function analyzeImage(imageBuffer) {
   const apiKey = process.env.GOOGLE_VISION_API_KEY;
@@ -203,15 +195,27 @@ async function analyzeImage(imageBuffer) {
 
 function buildSearchTerms(rawQuery, imageSignals, filenameTerms) {
   const queryTerms = tokenizeQuery(rawQuery);
+  const ocrTexts = imageSignals.texts || [];
+  const ocrPartNumbers = ocrTexts.filter(looksLikePartNumber);
+  const filenamePartNumbers = filenameTerms.filter(looksLikePartNumber);
   const imageTerms = [
-    ...(imageSignals.texts || []),
+    ...ocrTexts,
     ...(imageSignals.webLabels || []),
     ...(imageSignals.labels || []),
   ].filter((term) => !IGNORE_IMAGE_TERMS.has(term));
 
-  return [...new Set([...queryTerms, ...imageTerms, ...filenameTerms])]
+  // Priority: user query → filename part#s → OCR part#s → other image signals → remaining filename terms
+  return [
+    ...new Set([
+      ...queryTerms,
+      ...filenamePartNumbers,
+      ...ocrPartNumbers,
+      ...imageTerms,
+      ...filenameTerms,
+    ]),
+  ]
     .filter((term) => term.length >= 2 && !STOPWORDS.has(term))
-    .slice(0, 12);
+    .slice(0, 15);
 }
 
 // ── Score a row against the user's query ──────────────────────
@@ -245,14 +249,23 @@ function scoreRow(row, rawQuery, terms) {
     }
   }
 
-  // Per-column term hits — part_number / alternate_part_number weighted higher than the rest.
+  // Per-column term hits.
+  // Part-number-like terms (e.g. "k111580") get heavy weight on PN fields
+  // so they dominate over generic description accumulation.
   for (const t of terms) {
-    if (pn.includes(t)) score += 10;
-    if (apn.includes(t)) score += 10;
+    const pnWeight = looksLikePartNumber(t) ? 100 : 10;
+    if (pn.includes(t)) {
+      score += pnWeight;
+      if (pn === t) score += pnWeight * 10; // exact PN token match
+    }
+    if (apn.includes(t)) {
+      score += pnWeight;
+      if (apn === t) score += pnWeight * 10;
+    }
     for (const c of TEXT_COLUMNS) {
       if (c === "part_number" || c === "alternate_part_number") continue;
       const v = (row[c] || "").toString().toLowerCase();
-      if (v.includes(t)) score += 1;
+      if (v.includes(t)) score += looksLikePartNumber(t) ? 2 : 1;
     }
   }
 

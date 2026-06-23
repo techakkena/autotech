@@ -243,21 +243,46 @@ router.post("/parts/bulk", express.json({ limit: "5mb" }), async (req, res) => {
   });
 
   let inserted = 0;
+  let updated = 0;
+
+  // Determine which part_numbers already exist so we can report inserts vs updates
+  const partNumbers = records.map((r) => r.part_number);
+  const { data: existingParts } = await supabase
+    .from("spare_parts")
+    .select("id, part_number")
+    .in("part_number", partNumbers);
+  const existingMap = Object.fromEntries(
+    (existingParts || []).map((p) => [p.part_number, p.id])
+  );
+
   for (const rec of records) {
-    const { error } = await supabase.from("spare_parts").insert(rec);
-    if (error) {
-      skipped.push({
-        part_number: rec.part_number,
-        reason: error.code === "23505" ? "Duplicate part number" : error.message,
-      });
+    const existingId = existingMap[rec.part_number];
+    if (existingId) {
+      // Update existing record
+      const { error } = await supabase
+        .from("spare_parts")
+        .update({ ...rec, updated_at: new Date().toISOString() })
+        .eq("id", existingId);
+      if (error) {
+        skipped.push({ part_number: rec.part_number, reason: error.message });
+      } else {
+        updated += 1;
+      }
     } else {
-      inserted += 1;
+      // Insert new record
+      const { error } = await supabase.from("spare_parts").insert(rec);
+      if (error) {
+        skipped.push({ part_number: rec.part_number, reason: error.message });
+      } else {
+        inserted += 1;
+      }
     }
   }
 
   return res.json({
     success: true,
     inserted,
+    updated,
     skipped: skipped.length,
     skipped_details: skipped,
     total_rows: rows.length,
@@ -280,9 +305,15 @@ router.put("/parts/:id", upload.array("images", 5), async (req, res) => {
 
     if (fetchErr) throw fetchErr;
 
-    // Upload any new images and merge with existing URLs
+    // Upload any new images
     const newUrls = await uploadImages(req.files || []);
-    const mergedUrls = [...(existing.image_urls || []), ...newUrls];
+
+    // Use the admin's kept existing URLs from the form body (not the full DB list)
+    // so image removals made in the UI are respected
+    const keptUrls = req.body.existing_urls
+      ? (Array.isArray(req.body.existing_urls) ? req.body.existing_urls : [req.body.existing_urls])
+      : (existing.image_urls || []);
+    const mergedUrls = [...keptUrls, ...newUrls];
 
     // Build update object — only include fields that were sent
     const updates = {};
@@ -305,7 +336,8 @@ router.put("/parts/:id", upload.array("images", 5), async (req, res) => {
         error: "company_brand cannot be empty",
       });
     }
-    if (newUrls.length) updates.image_urls = mergedUrls;
+    // Always write back the final image list (reflects any removals the admin made)
+    updates.image_urls = mergedUrls;
     updates.updated_at = new Date().toISOString();
 
     const { data, error } = await supabase
