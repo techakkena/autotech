@@ -696,6 +696,19 @@ function Home({ onResults, onIdentifyResults, subscription }) {
       const textHint = q.trim();
       if (textHint) fd.append("query", textHint);
       fd.append("upload_id", String(requestId));
+      const photoIdentifyResponse = await apiForm("/identify", fd);
+      if (identifyRequestRef.current !== requestId) return;
+
+      const identifyResults = photoIdentifyResponse.results || [];
+      if (photoIdentifyResponse.identified === false || identifyResults.length === 0) {
+        setErr(
+          photoIdentifyResponse.message ||
+          "No database match found for this uploaded photo. Try a clearer image or use text search below."
+        );
+        return;
+      }
+
+      onIdentifyResults(identifyResults, photoIdentifyResponse.search_terms_used, photoIdentifyResponse.query_used);
       const identifyData = await apiForm("/identify", fd);
       if (identifyRequestRef.current !== requestId) return;
 
